@@ -11,11 +11,11 @@ Implemented now:
 - Core channel layer interface
 - Django-style backend configuration loader
 - `inmemory` backend
+- `redis` backend
 
 Planned next:
 
 - `postgresql`
-- `redis` using Redis Pub/Sub with cluster-safe design
 - `nats`
 - `rabbitmq`
 
@@ -51,9 +51,15 @@ Configuration follows a Django channel-layer style mapping:
 ```python
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "fastapi_websockets.backends.inmemory.InMemoryChannelLayer",
+        "BACKEND": "fastapi_websockets.backends.redis.RedisChannelLayer",
         "CONFIG": {
-            "capacity": 100,
+            "url": "redis://localhost:6379/0",
+            "prefix": "fastapi-websockets",
+            "cluster": False,
+            "channel_expiry": 60,
+            "group_expiry": 86400,
+            "use_pubsub": True,
+            "sharded_pubsub": True,
         },
     },
 }
@@ -89,9 +95,44 @@ The in-memory backend is process-local. It is useful for local development, test
 
 It is not suitable for multi-process or multi-node production deployments because state is held in local memory.
 
+## Redis backend
+
+The Redis backend uses Redis lists as per-channel inboxes, Redis sets for group membership, and Redis Pub/Sub notifications for fast fan-out signaling.
+
+This keeps delivery independent of a live Pub/Sub subscription while still allowing Pub/Sub-based notifications. In practice that is safer than a pure Pub/Sub-only design when workers reconnect or restart.
+
+Cluster notes:
+
+- queue keys and notification channels use Redis hash tags so related per-channel data stays slot-local
+- `sharded_pubsub=True` uses `SPUBLISH` when the Redis client supports it
+- group fan-out works in Redis Cluster because group membership is read from one set key and messages are then sent to each channel independently
+
+Example:
+
+```python
+from fastapi_websockets import get_channel_layer
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "fastapi_websockets.backends.redis.RedisChannelLayer",
+        "CONFIG": {
+            "url": "redis://localhost:6379/0",
+            "prefix": "fastapi-websockets",
+            "cluster": False,
+            "channel_expiry": 60,
+            "group_expiry": 86400,
+            "use_pubsub": True,
+            "sharded_pubsub": True,
+        },
+    },
+}
+
+layer = get_channel_layer(CHANNEL_LAYERS)
+```
+
 ## Next steps
 
-The next backend to implement is Redis, followed by PostgreSQL, NATS, and RabbitMQ. Each distributed backend will document:
+The next backend to implement is PostgreSQL, followed by NATS and RabbitMQ. Each distributed backend will document:
 
 - topology assumptions
 - delivery guarantees
