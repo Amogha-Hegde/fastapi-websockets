@@ -13,11 +13,13 @@ Implemented now:
 - `inmemory` backend
 - `nats` backend
 - `postgresql` backend
+- `rabbitmq` backend
 - `redis` backend
 
 Planned next:
 
-- `rabbitmq`
+- backend contract refinements
+- integration-test coverage with real services
 
 ## Goals
 
@@ -187,9 +189,36 @@ CHANNEL_LAYERS = {
 }
 ```
 
+## RabbitMQ backend
+
+The RabbitMQ backend now uses `aio-pika`, with a direct exchange plus one queue per channel. Group fan-out is implemented by resolving group members and publishing one message per target channel.
+
+Cluster notes:
+
+- works across RabbitMQ clusters because queues and exchanges are broker-managed
+- per-channel queues provide durable delivery when `durable=True`
+- current group membership is held in process memory, so this first pass is suitable for single-node app membership management but not yet for fully shared multi-node group state
+
+Example:
+
+```python
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "fastapi_websockets.backends.rabbitmq.RabbitMQChannelLayer",
+        "CONFIG": {
+            "url": "amqp://guest:guest@localhost:5672//",
+            "exchange_name": "fastapi_websockets",
+            "queue_prefix": "fastapi-websockets",
+            "durable": True,
+            "message_ttl": 60000,
+        },
+    },
+}
+```
+
 ## Next steps
 
-The next backend to implement is RabbitMQ. Each distributed backend will document:
+Each distributed backend will continue to document:
 
 - topology assumptions
 - delivery guarantees
