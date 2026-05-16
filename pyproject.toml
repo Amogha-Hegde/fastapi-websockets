@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fastapi-websockets"
+version = "0.1.0"
+description = "Backend-agnostic WebSocket handling for FastAPI with scalable pluggable transports"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["fastapi", "logging", "observability", "json-logging", "middleware", "request-id"]
+authors = [
+    { name = "Amogha Hegde" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Framework :: AsyncIO",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+
+]
+dependencies = [
+    "fastapi",
+]
+
+[project.urls]
+Homepage = "https://github.com/Amogha-Hegde/fastapi-logplus"
+Repository = "https://github.com/Amogha-Hegde/fastapi-logplus"
+Issues = "https://github.com/Amogha-Hegde/fastapi-logplus/issues"
+
+[project.optional-dependencies]
+json = [
+    "orjson>=3.10.0",
+]
+test = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["fastapi_websockets*"]
