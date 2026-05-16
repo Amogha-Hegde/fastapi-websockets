@@ -11,11 +11,11 @@ Implemented now:
 - Core channel layer interface
 - Django-style backend configuration loader
 - `inmemory` backend
+- `postgresql` backend
 - `redis` backend
 
 Planned next:
 
-- `postgresql`
 - `nats`
 - `rabbitmq`
 
@@ -130,9 +130,39 @@ CHANNEL_LAYERS = {
 layer = get_channel_layer(CHANNEL_LAYERS)
 ```
 
+## PostgreSQL backend
+
+The PostgreSQL backend uses regular tables for per-channel messages and group membership. Each send also emits `pg_notify`, but actual message storage stays in tables so messages survive listener reconnects and process restarts.
+
+This backend is a better fit than pure `LISTEN/NOTIFY` when you need multi-node support without making delivery depend on PostgreSQL's small `NOTIFY` payload limit.
+
+Cluster notes:
+
+- works across multiple application nodes as long as they share the same PostgreSQL database
+- message delivery is table-backed, so it is not limited by `NOTIFY` payload size
+- current receive behavior is polling-based over stored messages; `pg_notify` is emitted for future push-style wakeups
+
+Example:
+
+```python
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "fastapi_websockets.backends.postgresql.PostgreSQLChannelLayer",
+        "CONFIG": {
+            "dsn": "postgresql://postgres:postgres@localhost:5432/postgres",
+            "schema": "fastapi_websockets",
+            "channel_expiry": 60,
+            "group_expiry": 86400,
+            "poll_interval": 0.1,
+            "ensure_schema": True,
+        },
+    },
+}
+```
+
 ## Next steps
 
-The next backend to implement is PostgreSQL, followed by NATS and RabbitMQ. Each distributed backend will document:
+The next backend to implement is NATS, followed by RabbitMQ. Each distributed backend will document:
 
 - topology assumptions
 - delivery guarantees
