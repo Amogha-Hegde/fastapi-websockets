@@ -11,12 +11,12 @@ Implemented now:
 - Core channel layer interface
 - Django-style backend configuration loader
 - `inmemory` backend
+- `nats` backend
 - `postgresql` backend
 - `redis` backend
 
 Planned next:
 
-- `nats`
 - `rabbitmq`
 
 ## Goals
@@ -160,9 +160,36 @@ CHANNEL_LAYERS = {
 }
 ```
 
+## NATS backend
+
+The NATS backend uses per-channel subjects for message delivery and NATS Key-Value storage for group membership. This keeps channel sends lightweight while allowing group fan-out across multiple application nodes.
+
+Cluster notes:
+
+- works naturally across a NATS cluster because subjects are cluster-routed
+- group membership is stored in a shared KV bucket instead of process memory
+- channel delivery is JetStream-backed, so messages survive normal consumer reconnects and can be pulled by multiple app nodes
+
+Example:
+
+```python
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "fastapi_websockets.backends.nats.NATSChannelLayer",
+        "CONFIG": {
+            "servers": ["nats://localhost:4222"],
+            "prefix": "fastapi-websockets",
+            "group_bucket": "fastapi_websockets_groups",
+            "stream_name": "FASTAPI_WEBSOCKETS",
+            "message_timeout": 60.0,
+        },
+    },
+}
+```
+
 ## Next steps
 
-The next backend to implement is NATS, followed by RabbitMQ. Each distributed backend will document:
+The next backend to implement is RabbitMQ. Each distributed backend will document:
 
 - topology assumptions
 - delivery guarantees

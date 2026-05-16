@@ -2,6 +2,7 @@
 
 from fastapi_websockets.backends.base import BaseChannelLayer
 from fastapi_websockets.backends.inmemory import InMemoryChannelLayer
+from fastapi_websockets.backends.nats import NATSChannelLayer
 from fastapi_websockets.backends.postgresql import PostgreSQLChannelLayer
 from fastapi_websockets.backends.redis import RedisChannelLayer
 from fastapi_websockets.config import (
@@ -25,6 +26,7 @@ __all__ = [
     "ChannelLayerClosed",
     "ChannelLayerError",
     "InMemoryChannelLayer",
+    "NATSChannelLayer",
     "InvalidChannelLayerConfig",
     "PostgreSQLChannelLayer",
     "RedisChannelLayer",
