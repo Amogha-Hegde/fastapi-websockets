@@ -139,3 +139,12 @@ def test_close_closes_internal_pool() -> None:
         assert pool.closed is True
 
     asyncio.run(run())
+
+
+def test_notify_channel_is_bounded_for_long_channel_names() -> None:
+    layer = PostgreSQLChannelLayer(ensure_schema=False)
+    notify_channel = layer._notify_channel(
+        "specific.1234567890abcdef1234567890abcdef1234567890abcdef"
+    )
+    assert len(notify_channel) <= 63
+    assert notify_channel.startswith("fastapi_websockets_")

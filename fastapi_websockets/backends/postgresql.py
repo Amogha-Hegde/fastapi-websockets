@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import hashlib
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -243,7 +244,11 @@ class PostgreSQLChannelLayer(BaseChannelLayer):
         return f"{self.schema}.{table}"
 
     def _notify_channel(self, channel: str) -> str:
-        return f"{self.schema}_{channel.replace('.', '_')}"
+        base = f"{self.schema}_{channel.replace('.', '_')}"
+        digest = hashlib.sha1(channel.encode("utf-8")).hexdigest()[:12]
+        suffix = f"_{digest}"
+        max_base_length = 63 - len(suffix)
+        return f"{base[:max_base_length]}{suffix}"
 
     def _expires_at(self, seconds: int) -> datetime | None:
         if seconds <= 0:
