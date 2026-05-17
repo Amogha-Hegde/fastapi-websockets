@@ -429,12 +429,3 @@ CHANNEL_LAYERS = {
     },
 }
 ```
-
-## Next steps
-
-Each distributed backend will continue to document:
-
-- topology assumptions
-- delivery guarantees
-- clustering behavior
-- operational caveats
