@@ -10,6 +10,7 @@ from fastapi_websockets.exceptions import InvalidChannelLayerConfig
 
 DEFAULT_BACKEND = "fastapi_websockets.backends.inmemory.InMemoryChannelLayer"
 DEFAULT_ENV_PREFIX = "FASTAPI_WEBSOCKETS_"
+DEFAULT_LAYER_ALIAS = "default"
 BACKEND_ALIASES = {
     "inmemory": "fastapi_websockets.backends.inmemory.InMemoryChannelLayer",
     "redis": "fastapi_websockets.backends.redis.RedisChannelLayer",
@@ -29,7 +30,7 @@ def parse_channel_layers(
     settings: Mapping[str, Mapping[str, Any]] | None,
 ) -> dict[str, BackendSettings]:
     if not settings:
-        return {"default": BackendSettings()}
+        return {DEFAULT_LAYER_ALIAS: BackendSettings()}
 
     parsed: dict[str, BackendSettings] = {}
     for alias, value in settings.items():
@@ -83,19 +84,28 @@ def build_channel_layer(backend: str, config: Mapping[str, Any] | None = None) -
 def parse_channel_layers_from_env(
     environ: Mapping[str, str] | None = None,
     prefix: str = DEFAULT_ENV_PREFIX,
-    alias: str = "default",
+    alias: str = DEFAULT_LAYER_ALIAS,
 ) -> dict[str, BackendSettings]:
     env = environ or os.environ
-    backend_value = env.get(f"{prefix}BACKEND", "inmemory").strip()
-    backend = _resolve_backend_path(backend_value)
-    config = _parse_backend_env_config(backend, env, prefix)
-    return {alias: BackendSettings(backend=backend, config=config)}
+    aliases_key = f"{prefix}ALIASES"
+    if aliases_key in env:
+        aliases = _get_csv_list(env, aliases_key, [alias])
+        return {
+            layer_alias: _parse_single_channel_layer_from_env(
+                env,
+                prefix=_alias_env_prefix(prefix, layer_alias),
+            )
+            for layer_alias in aliases
+        }
+    return {
+        alias: _parse_single_channel_layer_from_env(env, prefix=prefix),
+    }
 
 
 def get_channel_layer_from_env(
     environ: Mapping[str, str] | None = None,
     prefix: str = DEFAULT_ENV_PREFIX,
-    alias: str = "default",
+    alias: str = DEFAULT_LAYER_ALIAS,
 ) -> BaseChannelLayer:
     settings = parse_channel_layers_from_env(environ=environ, prefix=prefix, alias=alias)
     return get_channel_layer(
@@ -109,7 +119,7 @@ def get_channel_layer_from_env(
 
 def get_channel_layer(
     settings: Mapping[str, Mapping[str, Any]] | None = None,
-    alias: str = "default",
+    alias: str = DEFAULT_LAYER_ALIAS,
 ) -> BaseChannelLayer:
     layers = parse_channel_layers(settings)
     if alias not in layers:
@@ -122,6 +132,24 @@ def _resolve_backend_path(value: str) -> str:
     if not value:
         return DEFAULT_BACKEND
     return BACKEND_ALIASES.get(value.lower(), value)
+
+
+def _parse_single_channel_layer_from_env(
+    environ: Mapping[str, str],
+    prefix: str,
+) -> BackendSettings:
+    backend_value = environ.get(f"{prefix}BACKEND", "inmemory").strip()
+    backend = _resolve_backend_path(backend_value)
+    config = _parse_backend_env_config(backend, environ, prefix)
+    return BackendSettings(backend=backend, config=config)
+
+
+def _alias_env_prefix(prefix: str, alias: str) -> str:
+    token = "".join(char if char.isalnum() else "_" for char in alias.strip())
+    token = token.strip("_").upper()
+    if not token:
+        raise InvalidChannelLayerConfig("Channel layer alias must contain letters or digits")
+    return f"{prefix}{token}_"
 
 
 def _parse_backend_env_config(

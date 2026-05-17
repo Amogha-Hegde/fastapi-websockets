@@ -83,6 +83,13 @@ from fastapi_websockets import get_channel_layer_from_env
 layer = get_channel_layer_from_env()
 ```
 
+`get_channel_layer()` and `get_channel_layer_from_env()` are alias-aware. Both default to the `"default"` alias:
+
+```python
+default_layer = get_channel_layer(CHANNEL_LAYERS)
+events_layer = get_channel_layer(CHANNEL_LAYERS, alias="events")
+```
+
 The package includes a sample env file at `.env.sample`.
 
 Environment variable contract:
@@ -112,6 +119,27 @@ Environment variable contract:
 - `FASTAPI_WEBSOCKETS_RABBITMQ_QUEUE_PREFIX`
 - `FASTAPI_WEBSOCKETS_RABBITMQ_DURABLE`
 - `FASTAPI_WEBSOCKETS_RABBITMQ_MESSAGE_TTL`: integer milliseconds, or empty to disable TTL
+
+For a single default alias, the unaliased env vars above still work.
+
+For multiple aliases, set `FASTAPI_WEBSOCKETS_ALIASES` and prefix each alias into the variable names:
+
+```bash
+FASTAPI_WEBSOCKETS_ALIASES=default,events
+
+FASTAPI_WEBSOCKETS_DEFAULT_BACKEND=inmemory
+FASTAPI_WEBSOCKETS_DEFAULT_INMEMORY_CAPACITY=100
+
+FASTAPI_WEBSOCKETS_EVENTS_BACKEND=postgresql
+FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_DSN=postgresql://postgres:postgres@localhost:5432/postgres
+FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_SCHEMA=fastapi_websockets_events
+```
+
+Then select the alias you want:
+
+```python
+events_layer = get_channel_layer_from_env(alias="events")
+```
 
 ## Common API
 

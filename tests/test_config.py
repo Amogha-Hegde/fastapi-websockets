@@ -2,6 +2,7 @@ from fastapi_websockets.backends.inmemory import InMemoryChannelLayer
 from fastapi_websockets.config import (
     BACKEND_ALIASES,
     DEFAULT_BACKEND,
+    DEFAULT_LAYER_ALIAS,
     build_channel_layer,
     get_channel_layer,
     get_channel_layer_from_env,
@@ -14,8 +15,8 @@ from fastapi_websockets.exceptions import InvalidChannelLayerConfig
 
 def test_parse_channel_layers_uses_default_config_when_none() -> None:
     layers = parse_channel_layers(None)
-    assert layers["default"].backend == DEFAULT_BACKEND
-    assert layers["default"].config == {}
+    assert layers[DEFAULT_LAYER_ALIAS].backend == DEFAULT_BACKEND
+    assert layers[DEFAULT_LAYER_ALIAS].config == {}
 
 
 def test_load_backend_class_resolves_builtin_backend() -> None:
@@ -62,8 +63,8 @@ def test_get_channel_layer_rejects_unknown_alias() -> None:
 
 def test_parse_channel_layers_from_env_uses_inmemory_defaults() -> None:
     layers = parse_channel_layers_from_env({})
-    assert layers["default"].backend == BACKEND_ALIASES["inmemory"]
-    assert layers["default"].config == {"capacity": 100}
+    assert layers[DEFAULT_LAYER_ALIAS].backend == BACKEND_ALIASES["inmemory"]
+    assert layers[DEFAULT_LAYER_ALIAS].config == {"capacity": 100}
 
 
 def test_parse_channel_layers_from_env_supports_redis() -> None:
@@ -79,7 +80,7 @@ def test_parse_channel_layers_from_env_supports_redis() -> None:
             "FASTAPI_WEBSOCKETS_REDIS_SHARDED_PUBSUB": "false",
         }
     )
-    settings = layers["default"]
+    settings = layers[DEFAULT_LAYER_ALIAS]
     assert settings.backend == BACKEND_ALIASES["redis"]
     assert settings.config == {
         "url": "redis://redis.example:6379/1",
@@ -104,8 +105,8 @@ def test_parse_channel_layers_from_env_supports_postgresql() -> None:
             "FASTAPI_WEBSOCKETS_POSTGRESQL_ENSURE_SCHEMA": "no",
         }
     )
-    assert layers["default"].backend == BACKEND_ALIASES["postgresql"]
-    assert layers["default"].config == {
+    assert layers[DEFAULT_LAYER_ALIAS].backend == BACKEND_ALIASES["postgresql"]
+    assert layers[DEFAULT_LAYER_ALIAS].config == {
         "dsn": "postgresql://user:pass@db:5432/app",
         "schema": "ws",
         "channel_expiry": 10,
@@ -126,8 +127,8 @@ def test_parse_channel_layers_from_env_supports_nats() -> None:
             "FASTAPI_WEBSOCKETS_NATS_MESSAGE_TIMEOUT": "15.5",
         }
     )
-    assert layers["default"].backend == BACKEND_ALIASES["nats"]
-    assert layers["default"].config == {
+    assert layers[DEFAULT_LAYER_ALIAS].backend == BACKEND_ALIASES["nats"]
+    assert layers[DEFAULT_LAYER_ALIAS].config == {
         "servers": ["nats://one:4222", "nats://two:4222"],
         "prefix": "demo",
         "group_bucket": "groups",
@@ -147,8 +148,8 @@ def test_parse_channel_layers_from_env_supports_rabbitmq() -> None:
             "FASTAPI_WEBSOCKETS_RABBITMQ_MESSAGE_TTL": "",
         }
     )
-    assert layers["default"].backend == BACKEND_ALIASES["rabbitmq"]
-    assert layers["default"].config == {
+    assert layers[DEFAULT_LAYER_ALIAS].backend == BACKEND_ALIASES["rabbitmq"]
+    assert layers[DEFAULT_LAYER_ALIAS].config == {
         "url": "amqp://user:pass@mq:5672//",
         "exchange_name": "ws",
         "queue_prefix": "queue",
@@ -164,8 +165,8 @@ def test_parse_channel_layers_from_env_accepts_full_backend_path() -> None:
             "FASTAPI_WEBSOCKETS_INMEMORY_CAPACITY": "7",
         }
     )
-    assert layers["default"].backend == DEFAULT_BACKEND
-    assert layers["default"].config == {"capacity": 7}
+    assert layers[DEFAULT_LAYER_ALIAS].backend == DEFAULT_BACKEND
+    assert layers[DEFAULT_LAYER_ALIAS].config == {"capacity": 7}
 
 
 def test_get_channel_layer_from_env_builds_backend() -> None:
@@ -177,6 +178,49 @@ def test_get_channel_layer_from_env_builds_backend() -> None:
     )
     assert isinstance(layer, InMemoryChannelLayer)
     assert layer.capacity == 9
+
+
+def test_parse_channel_layers_from_env_supports_multiple_aliases() -> None:
+    layers = parse_channel_layers_from_env(
+        {
+            "FASTAPI_WEBSOCKETS_ALIASES": "default,events",
+            "FASTAPI_WEBSOCKETS_DEFAULT_BACKEND": "inmemory",
+            "FASTAPI_WEBSOCKETS_DEFAULT_INMEMORY_CAPACITY": "5",
+            "FASTAPI_WEBSOCKETS_EVENTS_BACKEND": "postgresql",
+            "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_DSN": "postgresql://user:pass@db:5432/app",
+            "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_SCHEMA": "events_ws",
+            "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_CHANNEL_EXPIRY": "15",
+            "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_GROUP_EXPIRY": "45",
+            "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_POLL_INTERVAL": "0.5",
+            "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_ENSURE_SCHEMA": "false",
+        }
+    )
+    assert layers["default"].backend == BACKEND_ALIASES["inmemory"]
+    assert layers["default"].config == {"capacity": 5}
+    assert layers["events"].backend == BACKEND_ALIASES["postgresql"]
+    assert layers["events"].config == {
+        "dsn": "postgresql://user:pass@db:5432/app",
+        "schema": "events_ws",
+        "channel_expiry": 15,
+        "group_expiry": 45,
+        "poll_interval": 0.5,
+        "ensure_schema": False,
+    }
+
+
+def test_get_channel_layer_from_env_uses_requested_alias() -> None:
+    layer = get_channel_layer_from_env(
+        {
+            "FASTAPI_WEBSOCKETS_ALIASES": "default,events",
+            "FASTAPI_WEBSOCKETS_DEFAULT_BACKEND": "inmemory",
+            "FASTAPI_WEBSOCKETS_DEFAULT_INMEMORY_CAPACITY": "3",
+            "FASTAPI_WEBSOCKETS_EVENTS_BACKEND": "inmemory",
+            "FASTAPI_WEBSOCKETS_EVENTS_INMEMORY_CAPACITY": "11",
+        },
+        alias="events",
+    )
+    assert isinstance(layer, InMemoryChannelLayer)
+    assert layer.capacity == 11
 
 
 def test_parse_channel_layers_from_env_rejects_invalid_bool() -> None:
