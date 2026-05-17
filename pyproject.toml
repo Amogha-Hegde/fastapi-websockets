@@ -55,3 +55,6 @@ test = [
 
 [tool.setuptools.packages.find]
 include = ["fastapi_websockets*"]
+
+[tool.setuptools.package-data]
+fastapi_websockets = [".agents/skills/*/SKILL.md"]

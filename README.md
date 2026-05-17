@@ -46,6 +46,17 @@ pip install "fastapi-websockets[rabbitmq]"
 pip install "fastapi-websockets[test]"
 ```
 
+## Agent Skill
+
+The package includes a repo/library skill at `fastapi_websockets/.agents/skills/fastapi-websockets/SKILL.md`.
+
+Use that skill when:
+
+- changing code in this repository
+- writing or modifying application code that integrates with `fastapi-websockets`
+
+The skill is packaged with the library so agent-aware tools can discover the same guidance from an installed copy of `fastapi-websockets`, not only from this repository checkout.
+
 ## Configuration
 
 Configuration follows a Django channel-layer style mapping:

@@ -1,11 +1,16 @@
 ---
 name: fastapi-websockets
-description: Use when modifying this repository. Covers the intended architecture for channel layers, consumers, message envelopes, env aliasing, lazy backend clients, and the repo's do/don't rules for changes and tests.
+description: Use when modifying this repository or when writing application code that integrates with the fastapi-websockets library. Covers the intended architecture for channel layers, consumers, message envelopes, env aliasing, lazy backend clients, and the repo's do/don't rules for changes and tests.
 ---
 
 # fastapi-websockets
 
-Use this skill when changing code in this repository.
+Use this skill when:
+
+- changing code in this repository
+- adding, debugging, or refactoring application code that uses the `fastapi-websockets` library
+
+When the library is installed with this packaged skill available, prefer this guidance for both library internals and consumer-side integration code.
 
 ## Purpose
 
@@ -17,6 +22,43 @@ This package provides:
 - Channels-style async consumers on top of FastAPI `WebSocket`
 
 This package does not aim to hide backend-specific delivery guarantees. Keep the public API consistent while documenting backend differences clearly.
+
+## References
+
+Read these files first when the task touches the corresponding area:
+
+- `README.md`
+  Primary user-facing usage, configuration, and examples.
+- `fastapi_websockets/__init__.py`
+  Public exports that must stay coherent for library consumers.
+- `fastapi_websockets/config.py`
+  Channel-layer construction, alias handling, and environment parsing.
+- `fastapi_websockets/messages.py`
+  Websocket envelope builders and message send helpers.
+- `fastapi_websockets/consumers.py`
+  Generic and JSON websocket consumer abstractions.
+- `fastapi_websockets/serialization.py`
+  Serializer boundary for distributed backends and bytes preservation.
+- `fastapi_websockets/backends/base.py`
+  Core `BaseChannelLayer` contract.
+- `fastapi_websockets/backends/inmemory.py`
+  Simplest backend reference implementation.
+- `fastapi_websockets/backends/redis.py`
+  Redis backend behavior and lazy dependency/client patterns.
+- `fastapi_websockets/backends/postgresql.py`
+  PostgreSQL backend behavior and polling/listen semantics.
+- `fastapi_websockets/backends/nats.py`
+  NATS backend behavior and stream/group semantics.
+- `fastapi_websockets/backends/rabbitmq.py`
+  RabbitMQ backend behavior and exchange/queue semantics.
+- `tests/test_config.py`
+  Config and environment compatibility expectations.
+- `tests/test_messages.py`
+  Message envelope and helper expectations.
+- `tests/test_consumers.py`
+  Consumer dispatch, websocket frame handling, and cleanup expectations.
+- `tests/test_inmemory.py`, `tests/test_redis.py`, `tests/test_postgresql.py`, `tests/test_nats.py`, `tests/test_rabbitmq.py`
+  Backend-specific contract coverage and regression expectations.
 
 ## Core Architecture
 
