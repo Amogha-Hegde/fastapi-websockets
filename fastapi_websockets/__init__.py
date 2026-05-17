@@ -10,8 +10,10 @@ from fastapi_websockets.config import (
     BackendSettings,
     build_channel_layer,
     get_channel_layer,
+    get_channel_layer_from_env,
     load_backend_class,
     parse_channel_layers,
+    parse_channel_layers_from_env,
 )
 from fastapi_websockets.exceptions import (
     ChannelFull,
@@ -34,6 +36,8 @@ __all__ = [
     "RedisChannelLayer",
     "build_channel_layer",
     "get_channel_layer",
+    "get_channel_layer_from_env",
     "load_backend_class",
     "parse_channel_layers",
+    "parse_channel_layers_from_env",
 ]
