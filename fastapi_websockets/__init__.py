@@ -21,6 +21,12 @@ from fastapi_websockets.exceptions import (
     ChannelLayerError,
     InvalidChannelLayerConfig,
 )
+from fastapi_websockets.messages import (
+    send_bytes_message,
+    send_json_message,
+    websocket_bytes_message,
+    websocket_json_message,
+)
 
 __all__ = [
     "BackendSettings",
@@ -40,4 +46,8 @@ __all__ = [
     "load_backend_class",
     "parse_channel_layers",
     "parse_channel_layers_from_env",
+    "send_bytes_message",
+    "send_json_message",
+    "websocket_bytes_message",
+    "websocket_json_message",
 ]

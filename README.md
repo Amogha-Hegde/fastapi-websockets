@@ -129,6 +129,95 @@ channel_name = await layer.new_channel()
 await layer.close()
 ```
 
+Messages are JSON-style mappings, but distributed backends also preserve binary payloads inside those mappings. For example:
+
+```python
+from fastapi_websockets import send_bytes_message
+
+await send_bytes_message(
+    layer,
+    "chat.room",
+    b"\x00\x01hello",
+)
+message = await layer.receive("chat.room")
+assert message["body"] == b"\x00\x01hello"
+```
+
+If you want to build the envelope explicitly, helper builders are also available:
+
+```python
+from fastapi_websockets import websocket_bytes_message, websocket_json_message
+
+await layer.send(
+    "chat.room",
+    websocket_bytes_message(b"\x00\x01hello", event="upload"),
+)
+
+await layer.send(
+    "chat.room",
+    websocket_json_message({"text": "hello"}, event="chat"),
+)
+```
+
+## FastAPI WebSocket example
+
+Here is a minimal FastAPI endpoint that accepts both JSON and binary frames, forwards them through the channel layer, and writes them back to the client based on the message envelope:
+
+```python
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
+from fastapi_websockets import (
+    get_channel_layer,
+    send_bytes_message,
+    send_json_message,
+)
+
+app = FastAPI()
+layer = get_channel_layer()
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket) -> None:
+    await websocket.accept()
+    channel_name = await layer.new_channel("ws")
+
+    try:
+        while True:
+            frame = await websocket.receive()
+
+            if frame["type"] == "websocket.disconnect":
+                break
+
+            if frame.get("bytes") is not None:
+                await send_bytes_message(
+                    layer,
+                    channel_name,
+                    frame["bytes"],
+                    event="client.binary",
+                )
+            elif frame.get("text") is not None:
+                await send_json_message(
+                    layer,
+                    channel_name,
+                    {"text": frame["text"]},
+                    event="client.text",
+                )
+
+            message = await layer.receive(channel_name)
+            mode = message.get("mode")
+
+            if mode == "bytes":
+                await websocket.send_bytes(message["body"])
+            elif mode == "json":
+                await websocket.send_json(message["body"])
+            else:
+                await websocket.send_json(message)
+    except WebSocketDisconnect:
+        pass
+```
+
+If you only want JSON input, you can replace `await websocket.receive()` with `await websocket.receive_json()`. If you only want binary input, use `await websocket.receive_bytes()`.
+
 ## In-memory backend
 
 The in-memory backend is process-local. It is useful for local development, tests, and as the reference implementation for the public API.

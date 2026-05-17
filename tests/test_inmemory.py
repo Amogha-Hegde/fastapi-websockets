@@ -14,6 +14,21 @@ def test_send_and_receive_round_trip() -> None:
     asyncio.run(run())
 
 
+def test_send_and_receive_round_trip_with_bytes() -> None:
+    async def run() -> None:
+        layer = InMemoryChannelLayer()
+        payload = {
+            "type": "websocket.send",
+            "mode": "bytes",
+            "body": b"\x00\x01hello",
+        }
+        await layer.send("chat.room", payload)
+        message = await layer.receive("chat.room", timeout=0.1)
+        assert message == payload
+
+    asyncio.run(run())
+
+
 def test_group_send_fans_out_to_all_members() -> None:
     async def run() -> None:
         layer = InMemoryChannelLayer()

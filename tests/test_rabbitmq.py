@@ -86,6 +86,26 @@ def test_send_and_receive_round_trip() -> None:
     asyncio.run(run())
 
 
+def test_send_and_receive_round_trip_with_bytes() -> None:
+    import asyncio
+
+    async def run() -> None:
+        connection = FakeConnection()
+        layer = RabbitMQChannelLayer(rabbitmq_connection=connection)
+        layer._declare_exchange = fake_declare_exchange.__get__(layer, RabbitMQChannelLayer)
+        layer._build_message = fake_build_message.__get__(layer, RabbitMQChannelLayer)
+        payload = {
+            "type": "websocket.send",
+            "mode": "bytes",
+            "body": b"\x00\x01hello",
+        }
+        await layer.send("chat.room", payload)
+        message = await layer.receive("chat.room", timeout=0.1)
+        assert message == payload
+
+    asyncio.run(run())
+
+
 def test_group_send_fans_out_to_group_members() -> None:
     import asyncio
 
