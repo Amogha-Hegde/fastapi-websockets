@@ -75,6 +75,8 @@ from fastapi_websockets import get_channel_layer
 layer = get_channel_layer(CHANNEL_LAYERS)
 ```
 
+Create the layer once and reuse it for the lifetime of the app. A layer instance reuses its backend client or pool internally; do not call `get_channel_layer()` per request or per websocket connection.
+
 You can also configure the layer from environment variables:
 
 ```python
