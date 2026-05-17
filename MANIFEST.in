@@ -1,0 +1,1 @@
+recursive-include fastapi_websockets/.agents/skills *.md
