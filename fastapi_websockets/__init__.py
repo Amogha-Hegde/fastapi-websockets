@@ -15,6 +15,10 @@ from fastapi_websockets.config import (
     parse_channel_layers,
     parse_channel_layers_from_env,
 )
+from fastapi_websockets.consumers import (
+    AsyncJsonWebSocketConsumer,
+    AsyncWebSocketConsumer,
+)
 from fastapi_websockets.exceptions import (
     ChannelFull,
     ChannelLayerClosed,
@@ -30,6 +34,8 @@ from fastapi_websockets.messages import (
 
 __all__ = [
     "BackendSettings",
+    "AsyncJsonWebSocketConsumer",
+    "AsyncWebSocketConsumer",
     "BaseChannelLayer",
     "ChannelFull",
     "ChannelLayerClosed",

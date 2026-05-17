@@ -246,6 +246,52 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
 If you only want JSON input, you can replace `await websocket.receive()` with `await websocket.receive_json()`. If you only want binary input, use `await websocket.receive_bytes()`.
 
+If you want a Django Channels-style API, use the consumer classes instead of writing the websocket loop yourself:
+
+```python
+from fastapi import FastAPI, WebSocket
+
+from fastapi_websockets import (
+    AsyncJsonWebSocketConsumer,
+    get_channel_layer,
+)
+
+app = FastAPI()
+layer = get_channel_layer()
+
+
+class ExampleConsumer(AsyncJsonWebSocketConsumer):
+    async def connect(self) -> None:
+        user_id = self.path_params["user_id"]
+        self.group_name = f"user_{user_id}"
+        await self.group_add(self.group_name)
+        await self.accept()
+        await self.send_json({
+            "event": "CONNECTED",
+            "user_id": user_id,
+        })
+
+    async def receive_json(self, content: dict) -> None:
+        response = {
+            "event": "ECHO",
+            "payload": content,
+        }
+        await self.send_json(response)
+
+    async def send_back(self, event: dict) -> None:
+        await self.send_json(event.get("data", {}))
+
+
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket) -> None:
+    consumer = ExampleConsumer(layer=layer)
+    await consumer(websocket)
+```
+
+Channel-layer events are dispatched by `type`, with `.` translated to `_`. For example, `{"type": "send.back", "data": {...}}` will call `send_back(event)`.
+
+`{"type": "websocket.send", "mode": "json", "body": {...}}` and `{"type": "websocket.send", "mode": "bytes", "body": b"..."}` are handled automatically.
+
 ## In-memory backend
 
 The in-memory backend is process-local. It is useful for local development, tests, and as the reference implementation for the public API.
