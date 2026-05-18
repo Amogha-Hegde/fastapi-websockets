@@ -280,3 +280,27 @@ def test_async_websocket_consumer_ignores_closed_layer_in_disconnect_hook() -> N
         assert consumer.disconnect_called is True
 
     asyncio.run(run())
+
+
+def test_async_websocket_consumer_ignores_group_cleanup_backend_errors() -> None:
+    from fastapi_websockets.backends.inmemory import InMemoryChannelLayer
+
+    class FailingDiscardLayer(InMemoryChannelLayer):
+        async def group_discard(self, group: str, channel: str) -> None:
+            del group, channel
+            raise RuntimeError("transport is shutting down")
+
+    class CleanupConsumer(AsyncWebSocketConsumer):
+        async def connect(self) -> None:
+            self._joined_groups.add("room")
+            await self.accept()
+
+    async def run() -> None:
+        layer = FailingDiscardLayer()
+        websocket = FakeWebSocket([{"type": "websocket.disconnect", "code": 1000}])
+        consumer = CleanupConsumer(layer)
+        await consumer(websocket)
+        assert websocket.accepted is True
+        assert consumer._joined_groups == set()
+
+    asyncio.run(run())

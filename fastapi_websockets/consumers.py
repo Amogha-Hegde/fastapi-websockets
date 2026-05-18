@@ -196,8 +196,15 @@ class AsyncWebSocketConsumer:
 
     async def _cleanup_groups(self) -> None:
         for group in tuple(self._joined_groups):
-            await self.channel_layer.group_discard(group, self.channel_name)
-            self._joined_groups.discard(group)
+            try:
+                await self.channel_layer.group_discard(group, self.channel_name)
+            except Exception:
+                # Shutdown can close the transport while best-effort group cleanup is
+                # still running. At that point the websocket is already terminating,
+                # so cleanup failures should not surface as ASGI application errors.
+                pass
+            finally:
+                self._joined_groups.discard(group)
 
     async def _drain_pending_channel_events(
         self,
