@@ -26,6 +26,26 @@ class FakeSubscription:
         return items
 
 
+class FakeNatsTimeoutError(Exception):
+    pass
+
+
+FakeNatsTimeoutError.__module__ = "nats.errors"
+
+
+class PollingSubscription:
+    def __init__(self, stream_messages: list, failures_before_message: int = 0) -> None:
+        self.stream_messages = stream_messages
+        self.failures_before_message = failures_before_message
+
+    async def fetch(self, batch: int, timeout: float):
+        await asyncio.sleep(0)
+        if self.failures_before_message > 0:
+            self.failures_before_message -= 1
+            raise FakeNatsTimeoutError()
+        return self.stream_messages[:batch]
+
+
 class FakeJetStreamMessage:
     def __init__(self, data: bytes) -> None:
         self.data = data
@@ -184,5 +204,21 @@ def test_close_closes_internal_client() -> None:
         await layer.close()
         assert nc.drained is True
         assert nc.closed is True
+
+    asyncio.run(run())
+
+
+def test_receive_normalizes_nats_timeout_errors() -> None:
+    async def run() -> None:
+        nc = FakeNatsClient()
+        layer = NATSChannelLayer(nats_client=nc)
+        subject = layer._channel_subject("chat.room")
+        nc.js.subscriptions[subject] = PollingSubscription([], failures_before_message=1)
+        try:
+            await layer.receive("chat.room", timeout=0.01)
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError("Expected built-in TimeoutError for idle NATS receive")
 
     asyncio.run(run())

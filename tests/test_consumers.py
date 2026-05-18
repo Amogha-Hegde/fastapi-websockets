@@ -2,6 +2,7 @@ import asyncio
 
 from fastapi import WebSocketDisconnect
 
+from fastapi_websockets.backends.nats import NATSChannelLayer
 from fastapi_websockets.consumers import AsyncJsonWebSocketConsumer, AsyncWebSocketConsumer
 from fastapi_websockets.messages import websocket_json_message
 
@@ -178,6 +179,39 @@ def test_async_websocket_consumer_auto_accepts_when_connect_does_not() -> None:
     async def run() -> None:
         layer = InMemoryChannelLayer()
         websocket = FakeWebSocket([{"type": "websocket.disconnect", "code": 1000}])
+        consumer = PassiveConsumer(layer)
+        await consumer(websocket)
+        assert websocket.accepted is True
+
+    asyncio.run(run())
+
+
+def test_async_websocket_consumer_tolerates_idle_nats_polling() -> None:
+    class FakeSubscription:
+        async def fetch(self, batch: int, timeout: float):
+            await asyncio.sleep(0)
+            raise TimeoutError
+
+        async def unsubscribe(self) -> None:
+            return None
+
+    class FakeJetStream:
+        async def pull_subscribe(self, subject: str, durable: str):
+            del subject, durable
+            return FakeSubscription()
+
+    class DelayedDisconnectWebSocket(FakeWebSocket):
+        async def receive(self):
+            await asyncio.sleep(0.02)
+            return {"type": "websocket.disconnect", "code": 1000}
+
+    class PassiveConsumer(AsyncWebSocketConsumer):
+        async def connect(self) -> None:
+            return None
+
+    async def run() -> None:
+        layer = NATSChannelLayer(jetstream=FakeJetStream(), message_timeout=0.001)
+        websocket = DelayedDisconnectWebSocket([])
         consumer = PassiveConsumer(layer)
         await consumer(websocket)
         assert websocket.accepted is True

@@ -58,19 +58,40 @@ class NATSChannelLayer(BaseChannelLayer):
     ) -> Mapping[str, Any]:
         self._ensure_open()
         self._validate_name("channel", channel)
-        wait_for = self.message_timeout if timeout is None else timeout
         subscription = await self._ensure_subscription(channel)
-        messages = await subscription.fetch(1, timeout=wait_for)
-        if not messages:
-            raise TimeoutError(f"Timed out waiting for channel '{channel}'")
-        message = messages[0]
-        payload = self.serializer.loads(message.data)
-        ack = getattr(message, "ack", None)
-        if ack is not None:
-            result = ack()
-            if result is not None:
-                await result
-        return payload
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
+
+        while True:
+            wait_for = self.message_timeout
+            if deadline is not None:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError(f"Timed out waiting for channel '{channel}'")
+                wait_for = min(wait_for, remaining)
+
+            try:
+                messages = await subscription.fetch(1, timeout=wait_for)
+            except Exception as exc:
+                if not self._is_receive_timeout(exc):
+                    raise
+                if deadline is not None and loop.time() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for channel '{channel}'") from exc
+                continue
+
+            if not messages:
+                if deadline is not None and loop.time() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for channel '{channel}'")
+                continue
+
+            message = messages[0]
+            payload = self.serializer.loads(message.data)
+            ack = getattr(message, "ack", None)
+            if ack is not None:
+                result = ack()
+                if result is not None:
+                    await result
+            return payload
 
     async def new_channel(self, prefix: str = "specific") -> str:
         self._ensure_open()
@@ -213,6 +234,13 @@ class NATSChannelLayer(BaseChannelLayer):
     def _ensure_open(self) -> None:
         if self._closed:
             raise ChannelLayerClosed("Channel layer has been closed")
+
+    @staticmethod
+    def _is_receive_timeout(exc: Exception) -> bool:
+        if isinstance(exc, TimeoutError):
+            return True
+        exc_type = type(exc)
+        return exc_type.__module__.startswith("nats") and exc_type.__name__.endswith("TimeoutError")
 
     @staticmethod
     def _validate_name(kind: str, value: str) -> None:
