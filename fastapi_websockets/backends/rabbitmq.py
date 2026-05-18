@@ -19,6 +19,7 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         queue_prefix: str = "fastapi-websockets",
         durable: bool = True,
         message_ttl: int | None = 60000,
+        queue_expiry: int | None = 300000,
         poll_interval: float = 0.1,
         rabbitmq_connection: Any | None = None,
         serializer: Any | None = None,
@@ -30,6 +31,7 @@ class RabbitMQChannelLayer(BaseChannelLayer):
             queue_prefix=queue_prefix,
             durable=durable,
             message_ttl=message_ttl,
+            queue_expiry=queue_expiry,
             poll_interval=poll_interval,
             **config,
         )
@@ -38,6 +40,7 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         self.queue_prefix = queue_prefix
         self.durable = durable
         self.message_ttl = message_ttl
+        self.queue_expiry = queue_expiry
         self.poll_interval = poll_interval
         self.serializer = serializer or JsonSerializer()
         self._connection = rabbitmq_connection
@@ -46,7 +49,7 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         self._channel = None
         self._exchange = None
         self._declared_queues: dict[str, Any] = {}
-        self._groups: dict[str, set[str]] = {}
+        self._group_exchanges: dict[str, Any] = {}
 
     async def send(self, channel: str, message: Mapping[str, Any]) -> None:
         self._ensure_open()
@@ -92,26 +95,28 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         self._ensure_open()
         self._validate_name("group", group)
         self._validate_name("channel", channel)
-        await self._ensure_queue(channel)
-        self._groups.setdefault(group, set()).add(channel)
+        queue = await self._ensure_queue(channel)
+        exchange = await self._ensure_group_exchange(group)
+        await queue.bind(exchange, routing_key="")
 
     async def group_discard(self, group: str, channel: str) -> None:
         self._ensure_open()
         self._validate_name("group", group)
         self._validate_name("channel", channel)
-        channels = self._groups.get(group)
-        if not channels:
+        queue = await self._ensure_queue(channel)
+        exchange = await self._ensure_group_exchange(group)
+        unbind = getattr(queue, "unbind", None)
+        if unbind is None:
             return
-        channels.discard(channel)
-        if not channels:
-            self._groups.pop(group, None)
+        await unbind(exchange, routing_key="")
 
     async def group_send(self, group: str, message: Mapping[str, Any]) -> None:
         self._ensure_open()
         self._validate_name("group", group)
-        channels = tuple(self._groups.get(group, ()))
-        for channel in channels:
-            await self.send(channel, message)
+        exchange = await self._ensure_group_exchange(group)
+        message_payload = self.serializer.dumps(message)
+        outgoing = await self._build_message(message_payload)
+        await exchange.publish(outgoing, routing_key="")
 
     async def close(self) -> None:
         if self._closed:
@@ -155,6 +160,26 @@ class RabbitMQChannelLayer(BaseChannelLayer):
             durable=self.durable,
         )
 
+    async def _ensure_group_exchange(self, group: str) -> Any:
+        await self._get_channel()
+        exchange_name = self._group_exchange_name(group)
+        exchange = self._group_exchanges.get(exchange_name)
+        if exchange is not None:
+            return exchange
+        try:
+            import aio_pika
+        except ImportError as exc:
+            raise InvalidChannelLayerConfig(
+                "RabbitMQ backend requires the optional dependency group: pip install 'fastapi-websockets[rabbitmq]'"
+            ) from exc
+        exchange = await self._channel.declare_exchange(
+            exchange_name,
+            aio_pika.ExchangeType.FANOUT,
+            durable=self.durable,
+        )
+        self._group_exchanges[exchange_name] = exchange
+        return exchange
+
     async def _ensure_queue(self, channel: str) -> Any:
         await self._get_channel()
         queue_name = self._queue_name(channel)
@@ -170,6 +195,8 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         queue_arguments = {}
         if self.message_ttl is not None:
             queue_arguments["x-message-ttl"] = self.message_ttl
+        if self.queue_expiry is not None:
+            queue_arguments["x-expires"] = self.queue_expiry
         return await self._channel.declare_queue(
             queue_name,
             durable=self.durable,
@@ -193,6 +220,9 @@ class RabbitMQChannelLayer(BaseChannelLayer):
 
     def _queue_name(self, channel: str) -> str:
         return f"{self.queue_prefix}.{channel}".replace(" ", "_")
+
+    def _group_exchange_name(self, group: str) -> str:
+        return f"{self.queue_prefix}.group.{group}".replace(" ", "_")
 
     def _ensure_open(self) -> None:
         if self._closed:

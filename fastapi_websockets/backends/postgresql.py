@@ -21,6 +21,7 @@ class PostgreSQLChannelLayer(BaseChannelLayer):
         channel_expiry: int = 60,
         group_expiry: int = 86400,
         poll_interval: float = 0.1,
+        prune_interval: float = 60.0,
         ensure_schema: bool = True,
         pool: Any | None = None,
         serializer: Any | None = None,
@@ -32,6 +33,7 @@ class PostgreSQLChannelLayer(BaseChannelLayer):
             channel_expiry=channel_expiry,
             group_expiry=group_expiry,
             poll_interval=poll_interval,
+            prune_interval=prune_interval,
             ensure_schema=ensure_schema,
             **config,
         )
@@ -40,17 +42,21 @@ class PostgreSQLChannelLayer(BaseChannelLayer):
         self.channel_expiry = channel_expiry
         self.group_expiry = group_expiry
         self.poll_interval = poll_interval
+        self.prune_interval = prune_interval
         self.ensure_schema = ensure_schema
         self.serializer = serializer or JsonSerializer()
         self._pool = pool
         self._owns_pool = pool is None
         self._closed = False
         self._schema_ready = pool is not None or not ensure_schema
+        self._prune_lock = asyncio.Lock()
+        self._last_prune_at = 0.0
 
     async def send(self, channel: str, message: Mapping[str, Any]) -> None:
         self._ensure_open()
         self._validate_name("channel", channel)
         await self._get_pool()
+        await self._prune_expired_if_due()
         expires_at = self._expires_at(self.channel_expiry)
         payload = self.serializer.dumps(message).decode("utf-8")
         await self._execute(
@@ -70,6 +76,7 @@ class PostgreSQLChannelLayer(BaseChannelLayer):
         self._ensure_open()
         self._validate_name("channel", channel)
         await self._get_pool()
+        await self._prune_expired_if_due()
         deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
 
         while True:
@@ -113,6 +120,7 @@ class PostgreSQLChannelLayer(BaseChannelLayer):
         self._validate_name("group", group)
         self._validate_name("channel", channel)
         await self._get_pool()
+        await self._prune_expired_if_due()
         expires_at = self._expires_at(self.group_expiry)
         await self._execute(
             f"""
@@ -131,6 +139,7 @@ class PostgreSQLChannelLayer(BaseChannelLayer):
         self._validate_name("group", group)
         self._validate_name("channel", channel)
         await self._get_pool()
+        await self._prune_expired_if_due()
         await self._execute(
             f"DELETE FROM {self._qualify('group_members')} WHERE group_name = $1 AND channel = $2",
             group,
@@ -141,6 +150,7 @@ class PostgreSQLChannelLayer(BaseChannelLayer):
         self._ensure_open()
         self._validate_name("group", group)
         await self._get_pool()
+        await self._prune_expired_if_due()
         rows = await self._fetch(
             f"""
             SELECT channel
@@ -239,6 +249,25 @@ class PostgreSQLChannelLayer(BaseChannelLayer):
         async with pool.acquire() as connection:
             fn = getattr(connection, method)
             return await fn(query, *args)
+
+    async def _prune_expired_if_due(self) -> None:
+        if self.prune_interval <= 0:
+            return
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        if now - self._last_prune_at < self.prune_interval:
+            return
+        async with self._prune_lock:
+            now = loop.time()
+            if now - self._last_prune_at < self.prune_interval:
+                return
+            await self._execute(
+                f"DELETE FROM {self._qualify('messages')} WHERE expires_at IS NOT NULL AND expires_at <= NOW()"
+            )
+            await self._execute(
+                f"DELETE FROM {self._qualify('group_members')} WHERE expires_at IS NOT NULL AND expires_at <= NOW()"
+            )
+            self._last_prune_at = loop.time()
 
     def _qualify(self, table: str) -> str:
         return f"{self.schema}.{table}"

@@ -121,6 +121,7 @@ Environment variable contract:
 - `FASTAPI_WEBSOCKETS_POSTGRESQL_CHANNEL_EXPIRY`
 - `FASTAPI_WEBSOCKETS_POSTGRESQL_GROUP_EXPIRY`
 - `FASTAPI_WEBSOCKETS_POSTGRESQL_POLL_INTERVAL`
+- `FASTAPI_WEBSOCKETS_POSTGRESQL_PRUNE_INTERVAL`
 - `FASTAPI_WEBSOCKETS_POSTGRESQL_ENSURE_SCHEMA`
 - `FASTAPI_WEBSOCKETS_NATS_SERVERS`: comma-separated list
 - `FASTAPI_WEBSOCKETS_NATS_PREFIX`
@@ -132,6 +133,7 @@ Environment variable contract:
 - `FASTAPI_WEBSOCKETS_RABBITMQ_QUEUE_PREFIX`
 - `FASTAPI_WEBSOCKETS_RABBITMQ_DURABLE`
 - `FASTAPI_WEBSOCKETS_RABBITMQ_MESSAGE_TTL`: integer milliseconds, or empty to disable TTL
+- `FASTAPI_WEBSOCKETS_RABBITMQ_QUEUE_EXPIRY`: integer milliseconds, or empty to disable queue expiry
 - `FASTAPI_WEBSOCKETS_RABBITMQ_POLL_INTERVAL`
 
 For a single default alias, the unaliased env vars above still work.
@@ -371,6 +373,7 @@ CHANNEL_LAYERS = {
             "channel_expiry": 60,
             "group_expiry": 86400,
             "poll_interval": 0.1,
+            "prune_interval": 60.0,
             "ensure_schema": True,
         },
     },
@@ -426,6 +429,7 @@ CHANNEL_LAYERS = {
             "queue_prefix": "fastapi-websockets",
             "durable": True,
             "message_ttl": 60000,
+            "queue_expiry": 300000,
             "poll_interval": 0.1,
         },
     },

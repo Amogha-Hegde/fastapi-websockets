@@ -32,6 +32,22 @@ class FakePostgresPool:
             group, channel, expires_at = args
             self.group_members[(group, channel)] = expires_at
             return "INSERT 0 1"
+        if normalized == "DELETE FROM fastapi_websockets.messages WHERE expires_at IS NOT NULL AND expires_at <= NOW()":
+            now = datetime.now(timezone.utc)
+            self.messages = [
+                message
+                for message in self.messages
+                if message["expires_at"] is None or message["expires_at"] > now
+            ]
+            return "DELETE"
+        if normalized == "DELETE FROM fastapi_websockets.group_members WHERE expires_at IS NOT NULL AND expires_at <= NOW()":
+            now = datetime.now(timezone.utc)
+            self.group_members = {
+                key: expires_at
+                for key, expires_at in self.group_members.items()
+                if expires_at is None or expires_at > now
+            }
+            return "DELETE"
         if normalized.startswith("DELETE FROM fastapi_websockets.group_members"):
             group, channel = args
             self.group_members.pop((group, channel), None)
@@ -164,3 +180,28 @@ def test_notify_channel_is_bounded_for_long_channel_names() -> None:
     )
     assert len(notify_channel) <= 63
     assert notify_channel.startswith("fastapi_websockets_")
+
+
+def test_prunes_expired_messages_and_group_members() -> None:
+    async def run() -> None:
+        pool = FakePostgresPool()
+        layer = PostgreSQLChannelLayer(pool=pool, ensure_schema=False, prune_interval=0.001)
+        now = datetime.now(timezone.utc)
+        pool.messages.append(
+            {
+                "id": 1,
+                "channel": "chat.room",
+                "payload": '{"type":"stale"}',
+                "expires_at": now,
+            }
+        )
+        pool.group_members[("room", "channel.old")] = now
+
+        await asyncio.sleep(0.01)
+        await layer.send("chat.room", {"type": "message", "text": "fresh"})
+
+        assert len(pool.messages) == 1
+        assert pool.messages[0]["payload"] == '{"text":"fresh","type":"message"}'
+        assert pool.group_members == {}
+
+    asyncio.run(run())

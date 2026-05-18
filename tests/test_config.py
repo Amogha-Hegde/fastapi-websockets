@@ -102,6 +102,7 @@ def test_parse_channel_layers_from_env_supports_postgresql() -> None:
             "FASTAPI_WEBSOCKETS_POSTGRESQL_CHANNEL_EXPIRY": "10",
             "FASTAPI_WEBSOCKETS_POSTGRESQL_GROUP_EXPIRY": "20",
             "FASTAPI_WEBSOCKETS_POSTGRESQL_POLL_INTERVAL": "0.25",
+            "FASTAPI_WEBSOCKETS_POSTGRESQL_PRUNE_INTERVAL": "12.5",
             "FASTAPI_WEBSOCKETS_POSTGRESQL_ENSURE_SCHEMA": "no",
         }
     )
@@ -112,6 +113,7 @@ def test_parse_channel_layers_from_env_supports_postgresql() -> None:
         "channel_expiry": 10,
         "group_expiry": 20,
         "poll_interval": 0.25,
+        "prune_interval": 12.5,
         "ensure_schema": False,
     }
 
@@ -146,6 +148,7 @@ def test_parse_channel_layers_from_env_supports_rabbitmq() -> None:
             "FASTAPI_WEBSOCKETS_RABBITMQ_QUEUE_PREFIX": "queue",
             "FASTAPI_WEBSOCKETS_RABBITMQ_DURABLE": "0",
             "FASTAPI_WEBSOCKETS_RABBITMQ_MESSAGE_TTL": "",
+            "FASTAPI_WEBSOCKETS_RABBITMQ_QUEUE_EXPIRY": "",
             "FASTAPI_WEBSOCKETS_RABBITMQ_POLL_INTERVAL": "0.25",
         }
     )
@@ -156,6 +159,7 @@ def test_parse_channel_layers_from_env_supports_rabbitmq() -> None:
         "queue_prefix": "queue",
         "durable": False,
         "message_ttl": None,
+        "queue_expiry": None,
         "poll_interval": 0.25,
     }
 
@@ -194,6 +198,7 @@ def test_parse_channel_layers_from_env_supports_multiple_aliases() -> None:
             "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_CHANNEL_EXPIRY": "15",
             "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_GROUP_EXPIRY": "45",
             "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_POLL_INTERVAL": "0.5",
+            "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_PRUNE_INTERVAL": "30",
             "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_ENSURE_SCHEMA": "false",
         }
     )
@@ -206,6 +211,7 @@ def test_parse_channel_layers_from_env_supports_multiple_aliases() -> None:
         "channel_expiry": 15,
         "group_expiry": 45,
         "poll_interval": 0.5,
+        "prune_interval": 30.0,
         "ensure_schema": False,
     }
 

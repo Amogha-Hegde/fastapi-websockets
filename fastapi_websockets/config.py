@@ -187,6 +187,9 @@ def _parse_backend_env_config(
             "poll_interval": _get_float(
                 environ, f"{prefix}POSTGRESQL_POLL_INTERVAL", 0.1
             ),
+            "prune_interval": _get_float(
+                environ, f"{prefix}POSTGRESQL_PRUNE_INTERVAL", 60.0
+            ),
             "ensure_schema": _get_bool(
                 environ, f"{prefix}POSTGRESQL_ENSURE_SCHEMA", True
             ),
@@ -221,6 +224,9 @@ def _parse_backend_env_config(
             "durable": _get_bool(environ, f"{prefix}RABBITMQ_DURABLE", True),
             "message_ttl": _get_optional_int(
                 environ, f"{prefix}RABBITMQ_MESSAGE_TTL", 60000
+            ),
+            "queue_expiry": _get_optional_int(
+                environ, f"{prefix}RABBITMQ_QUEUE_EXPIRY", 300000
             ),
             "poll_interval": _get_float(
                 environ, f"{prefix}RABBITMQ_POLL_INTERVAL", 0.1

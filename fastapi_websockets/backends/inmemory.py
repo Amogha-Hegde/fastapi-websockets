@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections import defaultdict
 from typing import Any, Mapping
 from uuid import uuid4
@@ -12,10 +13,12 @@ from fastapi_websockets.exceptions import ChannelFull, ChannelLayerClosed
 class InMemoryChannelLayer(BaseChannelLayer):
     """Process-local reference implementation for development and testing."""
 
+    _CLOSE_SENTINEL = object()
+
     def __init__(self, capacity: int = 100, **config: Any) -> None:
         super().__init__(capacity=capacity, **config)
         self.capacity = capacity
-        self._channels: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+        self._channels: dict[str, asyncio.Queue[Any]] = {}
         self._groups: defaultdict[str, set[str]] = defaultdict(set)
         self._lock = asyncio.Lock()
         self._closed = False
@@ -34,8 +37,12 @@ class InMemoryChannelLayer(BaseChannelLayer):
         self._ensure_open()
         queue = await self._get_or_create_queue(channel)
         if timeout is None:
-            return await queue.get()
-        return await asyncio.wait_for(queue.get(), timeout=timeout)
+            item = await queue.get()
+        else:
+            item = await asyncio.wait_for(queue.get(), timeout=timeout)
+        if item is self._CLOSE_SENTINEL:
+            raise ChannelLayerClosed("Channel layer has been closed")
+        return item
 
     async def new_channel(self, prefix: str = "specific") -> str:
         self._ensure_open()
@@ -73,11 +80,17 @@ class InMemoryChannelLayer(BaseChannelLayer):
 
     async def close(self) -> None:
         async with self._lock:
+            if self._closed:
+                return
             self._closed = True
+            queues = tuple(self._channels.values())
             self._channels.clear()
             self._groups.clear()
+        for queue in queues:
+            with contextlib.suppress(asyncio.QueueFull):
+                queue.put_nowait(self._CLOSE_SENTINEL)
 
-    async def _get_or_create_queue(self, channel: str) -> asyncio.Queue[dict[str, Any]]:
+    async def _get_or_create_queue(self, channel: str) -> asyncio.Queue[Any]:
         self._validate_name("channel", channel)
         async with self._lock:
             queue = self._channels.get(channel)

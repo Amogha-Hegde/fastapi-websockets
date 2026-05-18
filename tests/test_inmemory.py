@@ -100,3 +100,19 @@ def test_closed_layer_rejects_new_operations() -> None:
             raise AssertionError("Expected ChannelLayerClosed after close")
 
     asyncio.run(run())
+
+
+def test_close_unblocks_pending_receivers() -> None:
+    async def run() -> None:
+        layer = InMemoryChannelLayer()
+        task = asyncio.create_task(layer.receive("chat.room"))
+        await asyncio.sleep(0)
+        await layer.close()
+        try:
+            await asyncio.wait_for(task, timeout=0.1)
+        except ChannelLayerClosed:
+            pass
+        else:
+            raise AssertionError("Expected pending receive to fail when layer closes")
+
+    asyncio.run(run())
