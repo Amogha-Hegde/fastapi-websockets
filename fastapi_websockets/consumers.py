@@ -9,6 +9,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from fastapi_websockets.backends.base import BaseChannelLayer
 from fastapi_websockets.config import get_channel_layer
+from fastapi_websockets.exceptions import ChannelLayerClosed
 
 
 class AsyncWebSocketConsumer:
@@ -61,10 +62,12 @@ class AsyncWebSocketConsumer:
                     task.cancel()
             for task in (websocket_pump, channel_pump):
                 if task is not None:
-                    with contextlib.suppress(asyncio.CancelledError):
+                    with contextlib.suppress(asyncio.CancelledError, ChannelLayerClosed):
                         await task
-            await self._cleanup_groups()
-            await self.disconnect(close_code)
+            with contextlib.suppress(ChannelLayerClosed):
+                await self._cleanup_groups()
+            with contextlib.suppress(ChannelLayerClosed):
+                await self.disconnect(close_code)
 
     async def connect(self) -> None:
         await self.accept()

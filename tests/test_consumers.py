@@ -4,6 +4,7 @@ from fastapi import WebSocketDisconnect
 
 from fastapi_websockets.backends.nats import NATSChannelLayer
 from fastapi_websockets.consumers import AsyncJsonWebSocketConsumer, AsyncWebSocketConsumer
+from fastapi_websockets.exceptions import ChannelLayerClosed
 from fastapi_websockets.messages import websocket_json_message
 
 
@@ -215,5 +216,67 @@ def test_async_websocket_consumer_tolerates_idle_nats_polling() -> None:
         consumer = PassiveConsumer(layer)
         await consumer(websocket)
         assert websocket.accepted is True
+
+    asyncio.run(run())
+
+
+def test_async_websocket_consumer_ignores_closed_layer_during_group_cleanup() -> None:
+    from fastapi_websockets.backends.inmemory import InMemoryChannelLayer
+
+    class ClosingLayerConsumer(AsyncWebSocketConsumer):
+        async def connect(self) -> None:
+            await self.group_add("room")
+            await self.accept()
+
+        async def receive_text(self, text_data: str) -> None:
+            del text_data
+            await self.channel_layer.close()
+            await self.close()
+
+    async def run() -> None:
+        layer = InMemoryChannelLayer()
+        websocket = FakeWebSocket(
+            [
+                {"type": "websocket.receive", "text": "shutdown"},
+            ]
+        )
+        consumer = ClosingLayerConsumer(layer)
+        await consumer(websocket)
+        assert websocket.accepted is True
+
+    asyncio.run(run())
+
+
+def test_async_websocket_consumer_ignores_closed_layer_in_disconnect_hook() -> None:
+    from fastapi_websockets.backends.inmemory import InMemoryChannelLayer
+
+    class DisconnectUsesLayerConsumer(AsyncWebSocketConsumer):
+        def __init__(self, layer) -> None:
+            super().__init__(layer=layer)
+            self.disconnect_called = False
+
+        async def connect(self) -> None:
+            await self.accept()
+
+        async def disconnect(self, close_code: int | None) -> None:
+            del close_code
+            self.disconnect_called = True
+            try:
+                await self.channel_layer.group_discard("room", self.channel_name)
+            except ChannelLayerClosed:
+                raise
+
+    async def run() -> None:
+        layer = InMemoryChannelLayer()
+        websocket = FakeWebSocket([{"type": "websocket.disconnect", "code": 1000}])
+        consumer = DisconnectUsesLayerConsumer(layer)
+
+        async def close_layer() -> None:
+            while not consumer.channel_name:
+                await asyncio.sleep(0)
+            await layer.close()
+
+        await asyncio.gather(consumer(websocket), close_layer())
+        assert consumer.disconnect_called is True
 
     asyncio.run(run())
