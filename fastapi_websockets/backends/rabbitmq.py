@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -18,6 +19,7 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         queue_prefix: str = "fastapi-websockets",
         durable: bool = True,
         message_ttl: int | None = 60000,
+        poll_interval: float = 0.1,
         rabbitmq_connection: Any | None = None,
         serializer: Any | None = None,
         **config: Any,
@@ -28,6 +30,7 @@ class RabbitMQChannelLayer(BaseChannelLayer):
             queue_prefix=queue_prefix,
             durable=durable,
             message_ttl=message_ttl,
+            poll_interval=poll_interval,
             **config,
         )
         self.url = url
@@ -35,6 +38,7 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         self.queue_prefix = queue_prefix
         self.durable = durable
         self.message_ttl = message_ttl
+        self.poll_interval = poll_interval
         self.serializer = serializer or JsonSerializer()
         self._connection = rabbitmq_connection
         self._owns_connection = rabbitmq_connection is None
@@ -58,11 +62,26 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         self._ensure_open()
         self._validate_name("channel", channel)
         queue = await self._ensure_queue(channel)
-        message = await queue.get(timeout=timeout, fail=False)
-        if message is None:
-            raise TimeoutError(f"Timed out waiting for channel '{channel}'")
-        await message.ack()
-        return self.serializer.loads(message.body)
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
+
+        while True:
+            wait_for = self.poll_interval
+            if deadline is not None:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError(f"Timed out waiting for channel '{channel}'")
+                wait_for = min(wait_for, remaining)
+
+            message = await queue.get(timeout=wait_for, fail=False)
+            if message is None:
+                if deadline is not None and loop.time() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for channel '{channel}'")
+                await asyncio.sleep(0)
+                continue
+
+            await message.ack()
+            return self.serializer.loads(message.body)
 
     async def new_channel(self, prefix: str = "specific") -> str:
         self._ensure_open()

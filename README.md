@@ -132,6 +132,7 @@ Environment variable contract:
 - `FASTAPI_WEBSOCKETS_RABBITMQ_QUEUE_PREFIX`
 - `FASTAPI_WEBSOCKETS_RABBITMQ_DURABLE`
 - `FASTAPI_WEBSOCKETS_RABBITMQ_MESSAGE_TTL`: integer milliseconds, or empty to disable TTL
+- `FASTAPI_WEBSOCKETS_RABBITMQ_POLL_INTERVAL`
 
 For a single default alias, the unaliased env vars above still work.
 
@@ -425,6 +426,7 @@ CHANNEL_LAYERS = {
             "queue_prefix": "fastapi-websockets",
             "durable": True,
             "message_ttl": 60000,
+            "poll_interval": 0.1,
         },
     },
 }

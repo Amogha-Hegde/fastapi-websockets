@@ -222,6 +222,9 @@ def _parse_backend_env_config(
             "message_ttl": _get_optional_int(
                 environ, f"{prefix}RABBITMQ_MESSAGE_TTL", 60000
             ),
+            "poll_interval": _get_float(
+                environ, f"{prefix}RABBITMQ_POLL_INTERVAL", 0.1
+            ),
         }
     return {}
 

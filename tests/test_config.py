@@ -146,6 +146,7 @@ def test_parse_channel_layers_from_env_supports_rabbitmq() -> None:
             "FASTAPI_WEBSOCKETS_RABBITMQ_QUEUE_PREFIX": "queue",
             "FASTAPI_WEBSOCKETS_RABBITMQ_DURABLE": "0",
             "FASTAPI_WEBSOCKETS_RABBITMQ_MESSAGE_TTL": "",
+            "FASTAPI_WEBSOCKETS_RABBITMQ_POLL_INTERVAL": "0.25",
         }
     )
     assert layers[DEFAULT_LAYER_ALIAS].backend == BACKEND_ALIASES["rabbitmq"]
@@ -155,6 +156,7 @@ def test_parse_channel_layers_from_env_supports_rabbitmq() -> None:
         "queue_prefix": "queue",
         "durable": False,
         "message_ttl": None,
+        "poll_interval": 0.25,
     }
 
 

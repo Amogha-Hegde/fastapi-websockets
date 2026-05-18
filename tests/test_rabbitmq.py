@@ -146,6 +146,25 @@ def test_group_discard_stops_future_delivery() -> None:
     asyncio.run(run())
 
 
+def test_receive_without_timeout_waits_for_late_message() -> None:
+    import asyncio
+
+    async def run() -> None:
+        connection = FakeConnection()
+        layer = RabbitMQChannelLayer(rabbitmq_connection=connection, poll_interval=0.001)
+        layer._declare_exchange = fake_declare_exchange.__get__(layer, RabbitMQChannelLayer)
+        layer._build_message = fake_build_message.__get__(layer, RabbitMQChannelLayer)
+
+        receive_task = asyncio.create_task(layer.receive("chat.room"))
+        await asyncio.sleep(0.01)
+        await layer.send("chat.room", {"type": "message", "text": "delayed"})
+
+        message = await asyncio.wait_for(receive_task, timeout=0.1)
+        assert message == {"type": "message", "text": "delayed"}
+
+    asyncio.run(run())
+
+
 def test_close_rejects_new_operations() -> None:
     import asyncio
 
