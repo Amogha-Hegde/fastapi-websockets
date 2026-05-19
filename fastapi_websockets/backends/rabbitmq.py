@@ -80,7 +80,12 @@ class RabbitMQChannelLayer(BaseChannelLayer):
                     raise TimeoutError(f"Timed out waiting for channel '{channel}'")
                 wait_for = min(wait_for, remaining)
 
-            message = await queue.get(timeout=wait_for, fail=False)
+            try:
+                message = await queue.get(timeout=wait_for, fail=False)
+            except BaseException as exc:
+                if self._is_expected_receive_shutdown_error(exc):
+                    raise ChannelLayerClosed("RabbitMQ channel layer is shutting down") from exc
+                raise
             if message is None:
                 if deadline is not None and loop.time() >= deadline:
                     raise TimeoutError(f"Timed out waiting for channel '{channel}'")
@@ -237,3 +242,36 @@ class RabbitMQChannelLayer(BaseChannelLayer):
     def _validate_name(kind: str, value: str) -> None:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{kind.title()} name must be a non-empty string")
+
+    @classmethod
+    def _is_expected_receive_shutdown_error(cls, exc: BaseException) -> bool:
+        return cls._exception_chain_contains(
+            exc,
+            (asyncio.CancelledError, ChannelLayerClosed, ConnectionError, BrokenPipeError, EOFError, OSError),
+        )
+
+    @classmethod
+    def _exception_chain_contains(
+        cls,
+        exc: BaseException,
+        expected: tuple[type[BaseException], ...],
+        seen: set[int] | None = None,
+    ) -> bool:
+        if isinstance(exc, expected):
+            return True
+
+        if seen is None:
+            seen = set()
+        marker = id(exc)
+        if marker in seen:
+            return False
+        seen.add(marker)
+
+        for nested in (getattr(exc, "__cause__", None), getattr(exc, "__context__", None)):
+            if isinstance(nested, BaseException) and cls._exception_chain_contains(
+                nested,
+                expected,
+                seen,
+            ):
+                return True
+        return False

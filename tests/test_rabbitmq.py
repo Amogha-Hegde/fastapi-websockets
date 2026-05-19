@@ -100,6 +100,16 @@ class FakeQueueWithoutUnbind(FakeQueue):
     unbind = None
 
 
+class FailingQueue(FakeQueue):
+    def __init__(self, connection, name, error: BaseException, arguments=None) -> None:
+        super().__init__(connection, name, arguments=arguments)
+        self.error = error
+
+    async def get(self, timeout=None, fail=False):
+        del timeout, fail
+        raise self.error
+
+
 def test_send_and_receive_round_trip() -> None:
     import asyncio
 
@@ -578,6 +588,54 @@ def test_real_helpers_raise_invalid_config_when_aio_pika_is_missing() -> None:
                 sys.modules.pop("aio_pika", None)
             else:
                 sys.modules["aio_pika"] = old_module
+
+    asyncio.run(run())
+
+
+def test_receive_normalizes_aiormq_shutdown_exception() -> None:
+    import asyncio
+
+    async def run() -> None:
+        connection = FakeConnection()
+        wrapped = Exception()
+        wrapped.__cause__ = asyncio.CancelledError()
+        queue = FailingQueue(connection, "fastapi-websockets.chat.room", wrapped)
+        connection.queues[queue.name] = queue
+
+        layer = RabbitMQChannelLayer(rabbitmq_connection=connection, poll_interval=0.001)
+        layer._declare_exchange = fake_declare_exchange.__get__(layer, RabbitMQChannelLayer)
+        await layer._get_channel()
+        layer._declared_queues[queue.name] = queue
+
+        try:
+            await layer.receive("chat.room", timeout=0.1)
+        except ChannelLayerClosed as exc:
+            assert "shutting down" in str(exc)
+        else:
+            raise AssertionError("Expected ChannelLayerClosed")
+
+    asyncio.run(run())
+
+
+def test_receive_still_surfaces_non_shutdown_queue_errors() -> None:
+    import asyncio
+
+    async def run() -> None:
+        connection = FakeConnection()
+        queue = FailingQueue(connection, "fastapi-websockets.chat.room", ValueError("boom"))
+        connection.queues[queue.name] = queue
+
+        layer = RabbitMQChannelLayer(rabbitmq_connection=connection, poll_interval=0.001)
+        layer._declare_exchange = fake_declare_exchange.__get__(layer, RabbitMQChannelLayer)
+        await layer._get_channel()
+        layer._declared_queues[queue.name] = queue
+
+        try:
+            await layer.receive("chat.room", timeout=0.1)
+        except ValueError as exc:
+            assert str(exc) == "boom"
+        else:
+            raise AssertionError("Expected ValueError")
 
     asyncio.run(run())
 
