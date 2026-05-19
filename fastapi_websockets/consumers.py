@@ -19,6 +19,7 @@ class AsyncWebSocketConsumer:
 
     def __init__(self, layer: BaseChannelLayer | None = None) -> None:
         self.channel_layer = layer or get_channel_layer()
+        self._owns_channel_layer = layer is None
         self.websocket: WebSocket | None = None
         self.scope: dict[str, Any] = {}
         self.channel_name = ""
@@ -77,6 +78,12 @@ class AsyncWebSocketConsumer:
             except BaseException as exc:
                 if not self._is_expected_shutdown_error(exc):
                     raise
+            if self._owns_channel_layer:
+                try:
+                    await self.channel_layer.close()
+                except BaseException as exc:
+                    if not self._is_expected_shutdown_error(exc):
+                        raise
 
     async def connect(self) -> None:
         await self.accept()

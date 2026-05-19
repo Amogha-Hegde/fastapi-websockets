@@ -387,3 +387,80 @@ def test_async_websocket_consumer_ignores_group_cleanup_backend_errors() -> None
         assert consumer._joined_groups == set()
 
     asyncio.run(run())
+
+
+def test_async_websocket_consumer_closes_owned_channel_layer() -> None:
+    import fastapi_websockets.consumers as consumers_module
+
+    class OwnedLayer:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def new_channel(self, prefix: str = "specific") -> str:
+            return f"{prefix}.channel"
+
+        async def receive(self, channel: str, timeout: float | None = None):
+            del channel, timeout
+            raise ChannelLayerClosed("closed")
+
+        async def group_add(self, group: str, channel: str) -> None:
+            del group, channel
+
+        async def group_discard(self, group: str, channel: str) -> None:
+            del group, channel
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class PassiveConsumer(AsyncWebSocketConsumer):
+        async def connect(self) -> None:
+            await self.accept()
+
+    async def run() -> None:
+        layer = OwnedLayer()
+        original = consumers_module.get_channel_layer
+        consumers_module.get_channel_layer = lambda: layer
+        try:
+            websocket = FakeWebSocket([{"type": "websocket.disconnect", "code": 1000}])
+            consumer = PassiveConsumer()
+            await consumer(websocket)
+            assert layer.closed is True
+        finally:
+            consumers_module.get_channel_layer = original
+
+    asyncio.run(run())
+
+
+def test_async_websocket_consumer_does_not_close_injected_channel_layer() -> None:
+    class SharedLayer:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def new_channel(self, prefix: str = "specific") -> str:
+            return f"{prefix}.channel"
+
+        async def receive(self, channel: str, timeout: float | None = None):
+            del channel, timeout
+            raise ChannelLayerClosed("closed")
+
+        async def group_add(self, group: str, channel: str) -> None:
+            del group, channel
+
+        async def group_discard(self, group: str, channel: str) -> None:
+            del group, channel
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class PassiveConsumer(AsyncWebSocketConsumer):
+        async def connect(self) -> None:
+            await self.accept()
+
+    async def run() -> None:
+        layer = SharedLayer()
+        websocket = FakeWebSocket([{"type": "websocket.disconnect", "code": 1000}])
+        consumer = PassiveConsumer(layer)
+        await consumer(websocket)
+        assert layer.closed is False
+
+    asyncio.run(run())
