@@ -181,7 +181,7 @@ def test_group_discard_stops_future_delivery() -> None:
         await layer.group_send("room", {"type": "broadcast"})
         try:
             await layer.receive("channel.one", timeout=0.02)
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
             pass
         else:
             raise AssertionError("Expected timeout after group_discard")
