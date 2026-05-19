@@ -1,42 +1,84 @@
 # fastapi-websockets
 
-Backend-agnostic channel layers for FastAPI WebSocket workloads.
+[![Tests](https://github.com/Amogha-Hegde/fastapi-websockets/actions/workflows/ci.yml/badge.svg)](https://github.com/Amogha-Hegde/fastapi-websockets/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/Amogha-Hegde/fastapi-websockets/branch/main/graph/badge.svg)](https://codecov.io/gh/Amogha-Hegde/fastapi-websockets)
+[![PyPI version](https://img.shields.io/pypi/v/fastapi-websockets.svg)](https://pypi.org/project/fastapi-websockets/)
+[![Python versions](https://img.shields.io/pypi/pyversions/fastapi-websockets.svg)](https://pypi.org/project/fastapi-websockets/)
+[![PyPI downloads](https://static.pepy.tech/badge/fastapi-websockets)](https://pepy.tech/project/fastapi-websockets)
 
-The package is modeled after the channel-layer style used in Django: you configure one backend behind a common async interface and swap transports without changing application code.
+Channel layers and consumer primitives for FastAPI WebSocket applications.
 
-## Status
+FastAPI provides the WebSocket primitive. It does not provide a standard channel layer for multi-worker or multi-instance messaging.
 
-Implemented now:
+`fastapi-websockets` fills that gap with a backend-agnostic API for:
 
-- Core channel layer interface
-- Django-style backend configuration loader
-- `inmemory` backend
-- `nats` backend
-- `postgresql` backend
-- `rabbitmq` backend
-- `redis` backend
+- room broadcast
+- per-connection messaging from other processes
+- background job fan-out
+- deployment across multiple workers or instances
 
-Planned next:
+Supported backends:
 
-- backend contract refinements
-- integration-test coverage with real services
+- `inmemory`
+- `redis`
+- `rabbitmq`
+- `nats`
+- `postgresql`
 
-## Goals
+## Why Use It
 
-- One common API across all backends
-- Async-first interface for FastAPI applications
-- Support both single-node and clustered deployments
-- Keep backend dependencies optional
+Use this package when a WebSocket application needs to move beyond a single process.
+
+Common requirements:
+
+- broadcast to all connections in a room
+- send to a specific connection from a worker, task queue, or separate service
+- switch brokers without rewriting application code
+- keep the WebSocket loop separate from broker-specific plumbing
+
+It is possible to build a minimal version of this in application code, but the implementation usually expands quickly once group membership, backend behavior, shutdown handling, and configuration need to be shared across projects.
+
+## Example
+
+```python
+from fastapi_websockets import get_channel_layer
+
+layer = get_channel_layer(
+    {
+        "default": {
+            "BACKEND": "fastapi_websockets.backends.redis.RedisChannelLayer",
+            "CONFIG": {"url": "redis://localhost:6379/0"},
+        }
+    }
+)
+
+await layer.group_add("room:demo", websocket_channel)
+await layer.group_send(
+    "room:demo",
+    {"type": "chat.message", "text": "hello from any worker"},
+)
+```
+
+Any FastAPI worker can publish to `room:demo`. Every WebSocket subscribed to that room can receive the message. The application API stays the same if the backend changes.
+
+## Features
+
+- common async interface across all supported backends
+- room and channel messaging primitives
+- FastAPI consumer base classes
+- Django-style configuration loader
+- environment-based configuration support
+- optional backend dependencies
 
 ## Installation
 
-Core package:
+Install the core package:
 
 ```bash
 pip install fastapi-websockets
 ```
 
-Backend extras:
+Install backend extras as needed:
 
 ```bash
 pip install "fastapi-websockets[postgresql]"
@@ -45,17 +87,6 @@ pip install "fastapi-websockets[nats]"
 pip install "fastapi-websockets[rabbitmq]"
 pip install "fastapi-websockets[test]"
 ```
-
-## Agent Skill
-
-The package includes a repo/library skill at `fastapi_websockets/.agents/skills/fastapi-websockets/SKILL.md`.
-
-Use that skill when:
-
-- changing code in this repository
-- writing or modifying application code that integrates with `fastapi-websockets`
-
-The skill is packaged with the library so agent-aware tools can discover the same guidance from an installed copy of `fastapi-websockets`, not only from this repository checkout.
 
 ## Configuration
 
@@ -78,7 +109,7 @@ CHANNEL_LAYERS = {
 }
 ```
 
-You can build a layer from that config:
+Build a layer from that config:
 
 ```python
 from fastapi_websockets import get_channel_layer
@@ -86,9 +117,9 @@ from fastapi_websockets import get_channel_layer
 layer = get_channel_layer(CHANNEL_LAYERS)
 ```
 
-Create the layer once and reuse it for the lifetime of the app. A layer instance reuses its backend client or pool internally; do not call `get_channel_layer()` per request or per websocket connection.
+Create the layer once and reuse it for the lifetime of the application. A layer instance reuses its backend client or pool internally. Do not call `get_channel_layer()` per request or per WebSocket connection.
 
-You can also configure the layer from environment variables:
+The layer can also be configured from environment variables:
 
 ```python
 from fastapi_websockets import get_channel_layer_from_env
@@ -96,16 +127,16 @@ from fastapi_websockets import get_channel_layer_from_env
 layer = get_channel_layer_from_env()
 ```
 
-`get_channel_layer()` and `get_channel_layer_from_env()` are alias-aware. Both default to the `"default"` alias:
+`get_channel_layer()` and `get_channel_layer_from_env()` are alias-aware. Both use the `"default"` alias unless another alias is provided:
 
 ```python
 default_layer = get_channel_layer(CHANNEL_LAYERS)
 events_layer = get_channel_layer(CHANNEL_LAYERS, alias="events")
 ```
 
-The package includes a sample env file at `.env.sample`.
+Sample environment variables are included in `.env.sample`.
 
-Environment variable contract:
+Environment variables:
 
 - `FASTAPI_WEBSOCKETS_BACKEND`: `inmemory`, `redis`, `postgresql`, `nats`, `rabbitmq`, or a full dotted backend path
 - `FASTAPI_WEBSOCKETS_INMEMORY_CAPACITY`
@@ -121,6 +152,7 @@ Environment variable contract:
 - `FASTAPI_WEBSOCKETS_POSTGRESQL_CHANNEL_EXPIRY`
 - `FASTAPI_WEBSOCKETS_POSTGRESQL_GROUP_EXPIRY`
 - `FASTAPI_WEBSOCKETS_POSTGRESQL_POLL_INTERVAL`
+- `FASTAPI_WEBSOCKETS_POSTGRESQL_PRUNE_INTERVAL`
 - `FASTAPI_WEBSOCKETS_POSTGRESQL_ENSURE_SCHEMA`
 - `FASTAPI_WEBSOCKETS_NATS_SERVERS`: comma-separated list
 - `FASTAPI_WEBSOCKETS_NATS_PREFIX`
@@ -132,8 +164,10 @@ Environment variable contract:
 - `FASTAPI_WEBSOCKETS_RABBITMQ_QUEUE_PREFIX`
 - `FASTAPI_WEBSOCKETS_RABBITMQ_DURABLE`
 - `FASTAPI_WEBSOCKETS_RABBITMQ_MESSAGE_TTL`: integer milliseconds, or empty to disable TTL
+- `FASTAPI_WEBSOCKETS_RABBITMQ_QUEUE_EXPIRY`: integer milliseconds, or empty to disable queue expiry
+- `FASTAPI_WEBSOCKETS_RABBITMQ_POLL_INTERVAL`
 
-For a single default alias, the unaliased env vars above still work.
+For a single default alias, the unaliased environment variables above can be used directly.
 
 For multiple aliases, set `FASTAPI_WEBSOCKETS_ALIASES` and prefix each alias into the variable names:
 
@@ -148,7 +182,7 @@ FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_DSN=postgresql://postgres:postgres@localhos
 FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_SCHEMA=fastapi_websockets_events
 ```
 
-Then select the alias you want:
+Then select the alias explicitly:
 
 ```python
 events_layer = get_channel_layer_from_env(alias="events")
@@ -156,7 +190,7 @@ events_layer = get_channel_layer_from_env(alias="events")
 
 ## Common API
 
-All backends are expected to support this interface:
+All backends implement the same interface:
 
 ```python
 await layer.send("chat.room", {"type": "message", "text": "hello"})
@@ -170,7 +204,7 @@ channel_name = await layer.new_channel()
 await layer.close()
 ```
 
-Messages are JSON-style mappings, but distributed backends also preserve binary payloads inside those mappings. For example:
+Messages are mapping-like payloads. Distributed backends also preserve binary payloads inside those mappings:
 
 ```python
 from fastapi_websockets import send_bytes_message
@@ -184,7 +218,7 @@ message = await layer.receive("chat.room")
 assert message["body"] == b"\x00\x01hello"
 ```
 
-If you want to build the envelope explicitly, helper builders are also available:
+Helper builders are also available when the message envelope should be constructed explicitly:
 
 ```python
 from fastapi_websockets import websocket_bytes_message, websocket_json_message
@@ -200,9 +234,9 @@ await layer.send(
 )
 ```
 
-## FastAPI WebSocket example
+## FastAPI WebSocket Example
 
-Here is a minimal FastAPI endpoint that accepts both JSON and binary frames, forwards them through the channel layer, and writes them back to the client based on the message envelope:
+This example accepts JSON and binary frames, forwards them through the channel layer, and writes them back to the client based on the message envelope:
 
 ```python
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -257,9 +291,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         pass
 ```
 
-If you only want JSON input, you can replace `await websocket.receive()` with `await websocket.receive_json()`. If you only want binary input, use `await websocket.receive_bytes()`.
+For JSON-only input, replace `await websocket.receive()` with `await websocket.receive_json()`. For binary-only input, use `await websocket.receive_bytes()`.
 
-If you want a Django Channels-style API, use the consumer classes instead of writing the websocket loop yourself:
+For a Django Channels-style API, use the consumer classes instead of writing the WebSocket loop directly:
 
 ```python
 from fastapi import FastAPI, WebSocket
@@ -301,23 +335,23 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     await consumer(websocket)
 ```
 
-Channel-layer events are dispatched by `type`, with `.` translated to `_`. For example, `{"type": "send.back", "data": {...}}` will call `send_back(event)`.
+Channel-layer events are dispatched by `type`, with `.` translated to `_`. For example, `{"type": "send.back", "data": {...}}` calls `send_back(event)`.
 
 `{"type": "websocket.send", "mode": "json", "body": {...}}` and `{"type": "websocket.send", "mode": "bytes", "body": b"..."}` are handled automatically.
 
-## In-memory backend
+## In-Memory Backend
 
 The in-memory backend is process-local. It is useful for local development, tests, and as the reference implementation for the public API.
 
 It is not suitable for multi-process or multi-node production deployments because state is held in local memory.
 
-## Redis backend
+## Redis Backend
 
 The Redis backend uses Redis lists as per-channel inboxes, Redis sets for group membership, and Redis Pub/Sub notifications for fast fan-out signaling.
 
 This keeps delivery independent of a live Pub/Sub subscription while still allowing Pub/Sub-based notifications. In practice that is safer than a pure Pub/Sub-only design when workers reconnect or restart.
 
-Cluster notes:
+Notes:
 
 - queue keys and notification channels use Redis hash tags so related per-channel data stays slot-local
 - `sharded_pubsub=True` uses `SPUBLISH` when the Redis client supports it
@@ -346,17 +380,17 @@ CHANNEL_LAYERS = {
 layer = get_channel_layer(CHANNEL_LAYERS)
 ```
 
-## PostgreSQL backend
+## PostgreSQL Backend
 
 The PostgreSQL backend uses regular tables for per-channel messages and group membership. Each send also emits `pg_notify`, but actual message storage stays in tables so messages survive listener reconnects and process restarts.
 
 This backend is a better fit than pure `LISTEN/NOTIFY` when you need multi-node support without making delivery depend on PostgreSQL's small `NOTIFY` payload limit.
 
-Cluster notes:
+Notes:
 
 - works across multiple application nodes as long as they share the same PostgreSQL database
 - message delivery is table-backed, so it is not limited by `NOTIFY` payload size
-- current receive behavior is polling-based over stored messages; `pg_notify` is emitted for future push-style wakeups
+- `LISTEN/NOTIFY` is used as a wake-up signal, while the tables remain the durable message store
 
 Example:
 
@@ -370,17 +404,18 @@ CHANNEL_LAYERS = {
             "channel_expiry": 60,
             "group_expiry": 86400,
             "poll_interval": 0.1,
+            "prune_interval": 60.0,
             "ensure_schema": True,
         },
     },
 }
 ```
 
-## NATS backend
+## NATS Backend
 
 The NATS backend uses per-channel subjects for message delivery and NATS Key-Value storage for group membership. This keeps channel sends lightweight while allowing group fan-out across multiple application nodes.
 
-Cluster notes:
+Notes:
 
 - works naturally across a NATS cluster because subjects are cluster-routed
 - group membership is stored in a shared KV bucket instead of process memory
@@ -403,15 +438,15 @@ CHANNEL_LAYERS = {
 }
 ```
 
-## RabbitMQ backend
+## RabbitMQ Backend
 
-The RabbitMQ backend now uses `aio-pika`, with a direct exchange plus one queue per channel. Group fan-out is implemented by resolving group members and publishing one message per target channel.
+The RabbitMQ backend uses `aio-pika`, with a direct exchange and one quorum queue per channel. Group fan-out is implemented through broker-managed bindings.
 
-Cluster notes:
+Notes:
 
 - works across RabbitMQ clusters because queues and exchanges are broker-managed
-- per-channel queues provide durable delivery when `durable=True`
-- current group membership is held in process memory, so this first pass is suitable for single-node app membership management but not yet for fully shared multi-node group state
+- per-channel quorum queues provide durable delivery
+- group membership is represented through queue bindings on broker-managed exchanges
 
 Example:
 
@@ -425,6 +460,8 @@ CHANNEL_LAYERS = {
             "queue_prefix": "fastapi-websockets",
             "durable": True,
             "message_ttl": 60000,
+            "queue_expiry": 300000,
+            "poll_interval": 0.1,
         },
     },
 }

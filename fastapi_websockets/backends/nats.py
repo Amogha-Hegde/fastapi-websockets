@@ -58,19 +58,40 @@ class NATSChannelLayer(BaseChannelLayer):
     ) -> Mapping[str, Any]:
         self._ensure_open()
         self._validate_name("channel", channel)
-        wait_for = self.message_timeout if timeout is None else timeout
         subscription = await self._ensure_subscription(channel)
-        messages = await subscription.fetch(1, timeout=wait_for)
-        if not messages:
-            raise TimeoutError(f"Timed out waiting for channel '{channel}'")
-        message = messages[0]
-        payload = self.serializer.loads(message.data)
-        ack = getattr(message, "ack", None)
-        if ack is not None:
-            result = ack()
-            if result is not None:
-                await result
-        return payload
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
+
+        while True:
+            wait_for = self.message_timeout
+            if deadline is not None:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError(f"Timed out waiting for channel '{channel}'")
+                wait_for = min(wait_for, remaining)
+
+            try:
+                messages = await subscription.fetch(1, timeout=wait_for)
+            except Exception as exc:
+                if not self._is_receive_timeout(exc):
+                    raise
+                if deadline is not None and loop.time() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for channel '{channel}'") from exc
+                continue
+
+            if not messages:
+                if deadline is not None and loop.time() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for channel '{channel}'")
+                continue
+
+            message = messages[0]
+            payload = self.serializer.loads(message.data)
+            ack = getattr(message, "ack", None)
+            if ack is not None:
+                result = ack()
+                if result is not None:
+                    await result
+            return payload
 
     async def new_channel(self, prefix: str = "specific") -> str:
         self._ensure_open()
@@ -81,26 +102,13 @@ class NATSChannelLayer(BaseChannelLayer):
         self._ensure_open()
         self._validate_name("group", group)
         self._validate_name("channel", channel)
-        kv = await self._get_kv_store()
-        channels = await self._get_group_channels(group)
-        channels.add(channel)
-        await kv.put(self._group_key(group), self.serializer.dumps({"channels": sorted(channels)}))
+        await self._mutate_group_channels(group, lambda channels: channels.add(channel))
 
     async def group_discard(self, group: str, channel: str) -> None:
         self._ensure_open()
         self._validate_name("group", group)
         self._validate_name("channel", channel)
-        kv = await self._get_kv_store()
-        channels = await self._get_group_channels(group)
-        channels.discard(channel)
-        if channels:
-            await kv.put(self._group_key(group), self.serializer.dumps({"channels": sorted(channels)}))
-            return
-        delete = getattr(kv, "delete", None)
-        if delete is not None:
-            await delete(self._group_key(group))
-        else:
-            await kv.put(self._group_key(group), self.serializer.dumps({"channels": []}))
+        await self._mutate_group_channels(group, lambda channels: channels.discard(channel))
 
     async def group_send(self, group: str, message: Mapping[str, Any]) -> None:
         self._ensure_open()
@@ -189,16 +197,110 @@ class NATSChannelLayer(BaseChannelLayer):
         return self._subscriptions[channel]
 
     async def _get_group_channels(self, group: str) -> set[str]:
-        kv = await self._get_kv_store()
-        try:
-            entry = await kv.get(self._group_key(group))
-        except Exception:
+        entry = await self._get_group_entry(group)
+        if entry is None:
             return set()
         payload = getattr(entry, "value", entry)
         if payload is None:
             return set()
         data = self.serializer.loads(payload)
         return set(data.get("channels", []))
+
+    async def _get_group_entry(self, group: str) -> Any | None:
+        kv = await self._get_kv_store()
+        try:
+            return await kv.get(self._group_key(group))
+        except Exception:
+            return None
+
+    async def _mutate_group_channels(self, group: str, mutate: Any) -> None:
+        kv = await self._get_kv_store()
+        key = self._group_key(group)
+        last_error: Exception | None = None
+
+        for _ in range(8):
+            entry = await self._get_group_entry(group)
+            channels = set()
+            revision = None
+            if entry is not None:
+                payload = getattr(entry, "value", entry)
+                if payload is not None:
+                    data = self.serializer.loads(payload)
+                    channels = set(data.get("channels", []))
+                revision = self._entry_revision(entry)
+
+            original = set(channels)
+            mutate(channels)
+            if channels == original:
+                return
+
+            try:
+                if channels:
+                    payload = self.serializer.dumps({"channels": sorted(channels)})
+                    if revision is None:
+                        if await self._kv_create_if_supported(kv, key, payload):
+                            return
+                        await kv.put(key, payload)
+                        return
+                    if await self._kv_update_if_supported(kv, key, payload, revision):
+                        return
+                    await kv.put(key, payload)
+                    return
+
+                if revision is None:
+                    return
+                if await self._kv_delete_if_supported(kv, key, revision):
+                    return
+                delete = getattr(kv, "delete", None)
+                if delete is not None:
+                    await delete(key)
+                    return
+                await kv.put(key, self.serializer.dumps({"channels": []}))
+                return
+            except Exception as exc:
+                last_error = exc
+                continue
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"Failed to update NATS group membership for '{group}'")
+
+    async def _kv_create_if_supported(self, kv: Any, key: str, payload: bytes) -> bool:
+        create = getattr(kv, "create", None)
+        if create is None:
+            return False
+        await create(key, payload)
+        return True
+
+    async def _kv_update_if_supported(
+        self, kv: Any, key: str, payload: bytes, revision: int | str
+    ) -> bool:
+        update = getattr(kv, "update", None)
+        if update is None:
+            return False
+        try:
+            await update(key, payload, revision)
+        except TypeError:
+            await update(key, payload, last=revision)
+        return True
+
+    async def _kv_delete_if_supported(self, kv: Any, key: str, revision: int | str) -> bool:
+        delete = getattr(kv, "delete", None)
+        if delete is None:
+            return False
+        try:
+            await delete(key, revision)
+        except TypeError:
+            await delete(key, last=revision)
+        return True
+
+    @staticmethod
+    def _entry_revision(entry: Any) -> int | str | None:
+        for attr in ("revision", "seq", "version"):
+            value = getattr(entry, attr, None)
+            if value is not None:
+                return value
+        return None
 
     def _channel_subject(self, channel: str) -> str:
         tokenized = channel.replace(".", "_")
@@ -213,6 +315,13 @@ class NATSChannelLayer(BaseChannelLayer):
     def _ensure_open(self) -> None:
         if self._closed:
             raise ChannelLayerClosed("Channel layer has been closed")
+
+    @staticmethod
+    def _is_receive_timeout(exc: Exception) -> bool:
+        if isinstance(exc, TimeoutError):
+            return True
+        exc_type = type(exc)
+        return exc_type.__module__.startswith("nats") and exc_type.__name__.endswith("TimeoutError")
 
     @staticmethod
     def _validate_name(kind: str, value: str) -> None:

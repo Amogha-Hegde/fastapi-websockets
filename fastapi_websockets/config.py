@@ -69,6 +69,11 @@ def load_backend_class(path: str) -> Type[BaseChannelLayer]:
             f"Backend class '{class_name}' was not found in '{module_path}'"
         ) from exc
 
+    if not isinstance(backend_class, type):
+        raise InvalidChannelLayerConfig(
+            f"Backend '{path}' must resolve to a BaseChannelLayer subclass"
+        )
+
     if not issubclass(backend_class, BaseChannelLayer):
         raise InvalidChannelLayerConfig(
             f"Backend '{path}' must inherit from BaseChannelLayer"
@@ -187,6 +192,9 @@ def _parse_backend_env_config(
             "poll_interval": _get_float(
                 environ, f"{prefix}POSTGRESQL_POLL_INTERVAL", 0.1
             ),
+            "prune_interval": _get_float(
+                environ, f"{prefix}POSTGRESQL_PRUNE_INTERVAL", 60.0
+            ),
             "ensure_schema": _get_bool(
                 environ, f"{prefix}POSTGRESQL_ENSURE_SCHEMA", True
             ),
@@ -221,6 +229,12 @@ def _parse_backend_env_config(
             "durable": _get_bool(environ, f"{prefix}RABBITMQ_DURABLE", True),
             "message_ttl": _get_optional_int(
                 environ, f"{prefix}RABBITMQ_MESSAGE_TTL", 60000
+            ),
+            "queue_expiry": _get_optional_int(
+                environ, f"{prefix}RABBITMQ_QUEUE_EXPIRY", 300000
+            ),
+            "poll_interval": _get_float(
+                environ, f"{prefix}RABBITMQ_POLL_INTERVAL", 0.1
             ),
         }
     return {}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -9,7 +10,7 @@ from fastapi_websockets.serialization import JsonSerializer
 
 
 class RabbitMQChannelLayer(BaseChannelLayer):
-    """RabbitMQ-backed channel layer using aio-pika exchanges and durable queues."""
+    """RabbitMQ-backed channel layer using aio-pika exchanges and quorum queues."""
 
     def __init__(
         self,
@@ -18,16 +19,24 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         queue_prefix: str = "fastapi-websockets",
         durable: bool = True,
         message_ttl: int | None = 60000,
+        queue_expiry: int | None = 300000,
+        poll_interval: float = 0.1,
         rabbitmq_connection: Any | None = None,
         serializer: Any | None = None,
         **config: Any,
     ) -> None:
+        if not durable:
+            raise InvalidChannelLayerConfig(
+                "RabbitMQ quorum queues must be durable"
+            )
         super().__init__(
             url=url,
             exchange_name=exchange_name,
             queue_prefix=queue_prefix,
             durable=durable,
             message_ttl=message_ttl,
+            queue_expiry=queue_expiry,
+            poll_interval=poll_interval,
             **config,
         )
         self.url = url
@@ -35,6 +44,8 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         self.queue_prefix = queue_prefix
         self.durable = durable
         self.message_ttl = message_ttl
+        self.queue_expiry = queue_expiry
+        self.poll_interval = poll_interval
         self.serializer = serializer or JsonSerializer()
         self._connection = rabbitmq_connection
         self._owns_connection = rabbitmq_connection is None
@@ -42,7 +53,7 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         self._channel = None
         self._exchange = None
         self._declared_queues: dict[str, Any] = {}
-        self._groups: dict[str, set[str]] = {}
+        self._group_exchanges: dict[str, Any] = {}
 
     async def send(self, channel: str, message: Mapping[str, Any]) -> None:
         self._ensure_open()
@@ -58,11 +69,31 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         self._ensure_open()
         self._validate_name("channel", channel)
         queue = await self._ensure_queue(channel)
-        message = await queue.get(timeout=timeout, fail=False)
-        if message is None:
-            raise TimeoutError(f"Timed out waiting for channel '{channel}'")
-        await message.ack()
-        return self.serializer.loads(message.body)
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
+
+        while True:
+            wait_for = self.poll_interval
+            if deadline is not None:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError(f"Timed out waiting for channel '{channel}'")
+                wait_for = min(wait_for, remaining)
+
+            try:
+                message = await queue.get(timeout=wait_for, fail=False)
+            except BaseException as exc:
+                if self._is_expected_receive_shutdown_error(exc):
+                    raise ChannelLayerClosed("RabbitMQ channel layer is shutting down") from exc
+                raise
+            if message is None:
+                if deadline is not None and loop.time() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for channel '{channel}'")
+                await asyncio.sleep(0)
+                continue
+
+            await message.ack()
+            return self.serializer.loads(message.body)
 
     async def new_channel(self, prefix: str = "specific") -> str:
         self._ensure_open()
@@ -73,26 +104,28 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         self._ensure_open()
         self._validate_name("group", group)
         self._validate_name("channel", channel)
-        await self._ensure_queue(channel)
-        self._groups.setdefault(group, set()).add(channel)
+        queue = await self._ensure_queue(channel)
+        exchange = await self._ensure_group_exchange(group)
+        await queue.bind(exchange, routing_key="")
 
     async def group_discard(self, group: str, channel: str) -> None:
         self._ensure_open()
         self._validate_name("group", group)
         self._validate_name("channel", channel)
-        channels = self._groups.get(group)
-        if not channels:
+        queue = await self._ensure_queue(channel)
+        exchange = await self._ensure_group_exchange(group)
+        unbind = getattr(queue, "unbind", None)
+        if unbind is None:
             return
-        channels.discard(channel)
-        if not channels:
-            self._groups.pop(group, None)
+        await unbind(exchange, routing_key="")
 
     async def group_send(self, group: str, message: Mapping[str, Any]) -> None:
         self._ensure_open()
         self._validate_name("group", group)
-        channels = tuple(self._groups.get(group, ()))
-        for channel in channels:
-            await self.send(channel, message)
+        exchange = await self._ensure_group_exchange(group)
+        message_payload = self.serializer.dumps(message)
+        outgoing = await self._build_message(message_payload)
+        await exchange.publish(outgoing, routing_key="")
 
     async def close(self) -> None:
         if self._closed:
@@ -136,6 +169,26 @@ class RabbitMQChannelLayer(BaseChannelLayer):
             durable=self.durable,
         )
 
+    async def _ensure_group_exchange(self, group: str) -> Any:
+        await self._get_channel()
+        exchange_name = self._group_exchange_name(group)
+        exchange = self._group_exchanges.get(exchange_name)
+        if exchange is not None:
+            return exchange
+        try:
+            import aio_pika
+        except ImportError as exc:
+            raise InvalidChannelLayerConfig(
+                "RabbitMQ backend requires the optional dependency group: pip install 'fastapi-websockets[rabbitmq]'"
+            ) from exc
+        exchange = await self._channel.declare_exchange(
+            exchange_name,
+            aio_pika.ExchangeType.FANOUT,
+            durable=self.durable,
+        )
+        self._group_exchanges[exchange_name] = exchange
+        return exchange
+
     async def _ensure_queue(self, channel: str) -> Any:
         await self._get_channel()
         queue_name = self._queue_name(channel)
@@ -148,9 +201,12 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         return queue
 
     async def _build_queue(self, queue_name: str, channel: str) -> Any:
-        queue_arguments = {}
+        del channel
+        queue_arguments = {"x-queue-type": "quorum"}
         if self.message_ttl is not None:
             queue_arguments["x-message-ttl"] = self.message_ttl
+        if self.queue_expiry is not None:
+            queue_arguments["x-expires"] = self.queue_expiry
         return await self._channel.declare_queue(
             queue_name,
             durable=self.durable,
@@ -175,6 +231,9 @@ class RabbitMQChannelLayer(BaseChannelLayer):
     def _queue_name(self, channel: str) -> str:
         return f"{self.queue_prefix}.{channel}".replace(" ", "_")
 
+    def _group_exchange_name(self, group: str) -> str:
+        return f"{self.queue_prefix}.group.{group}".replace(" ", "_")
+
     def _ensure_open(self) -> None:
         if self._closed:
             raise ChannelLayerClosed("Channel layer has been closed")
@@ -183,3 +242,36 @@ class RabbitMQChannelLayer(BaseChannelLayer):
     def _validate_name(kind: str, value: str) -> None:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{kind.title()} name must be a non-empty string")
+
+    @classmethod
+    def _is_expected_receive_shutdown_error(cls, exc: BaseException) -> bool:
+        return cls._exception_chain_contains(
+            exc,
+            (asyncio.CancelledError, ChannelLayerClosed, ConnectionError, BrokenPipeError, EOFError, OSError),
+        )
+
+    @classmethod
+    def _exception_chain_contains(
+        cls,
+        exc: BaseException,
+        expected: tuple[type[BaseException], ...],
+        seen: set[int] | None = None,
+    ) -> bool:
+        if isinstance(exc, expected):
+            return True
+
+        if seen is None:
+            seen = set()
+        marker = id(exc)
+        if marker in seen:
+            return False
+        seen.add(marker)
+
+        for nested in (getattr(exc, "__cause__", None), getattr(exc, "__context__", None)):
+            if isinstance(nested, BaseException) and cls._exception_chain_contains(
+                nested,
+                expected,
+                seen,
+            ):
+                return True
+        return False

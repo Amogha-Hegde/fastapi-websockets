@@ -11,6 +11,7 @@ class FakePostgresPool:
         self.group_members = {}
         self.closed = False
         self.executed = []
+        self.listener_connections = []
 
     async def execute(self, query: str, *args):
         self.executed.append((query, args))
@@ -32,6 +33,22 @@ class FakePostgresPool:
             group, channel, expires_at = args
             self.group_members[(group, channel)] = expires_at
             return "INSERT 0 1"
+        if normalized == "DELETE FROM fastapi_websockets.messages WHERE expires_at IS NOT NULL AND expires_at <= NOW()":
+            now = datetime.now(timezone.utc)
+            self.messages = [
+                message
+                for message in self.messages
+                if message["expires_at"] is None or message["expires_at"] > now
+            ]
+            return "DELETE"
+        if normalized == "DELETE FROM fastapi_websockets.group_members WHERE expires_at IS NOT NULL AND expires_at <= NOW()":
+            now = datetime.now(timezone.utc)
+            self.group_members = {
+                key: expires_at
+                for key, expires_at in self.group_members.items()
+                if expires_at is None or expires_at > now
+            }
+            return "DELETE"
         if normalized.startswith("DELETE FROM fastapi_websockets.group_members"):
             group, channel = args
             self.group_members.pop((group, channel), None)
@@ -67,6 +84,50 @@ class FakePostgresPool:
 
     async def close(self):
         self.closed = True
+
+    def acquire(self):
+        return FakePostgresAcquire(self)
+
+
+class FakePostgresAcquire:
+    def __init__(self, pool: FakePostgresPool) -> None:
+        self.pool = pool
+        self.connection = FakePostgresConnection(pool)
+
+    async def __aenter__(self):
+        return self.connection
+
+    async def __aexit__(self, exc_type, exc, tb):
+        del exc_type, exc, tb
+        return False
+
+
+class FakePostgresConnection:
+    def __init__(self, pool: FakePostgresPool) -> None:
+        self.pool = pool
+        self.listeners = {}
+        self.pool.listener_connections.append(self)
+
+    async def execute(self, query: str, *args):
+        return await self.pool.execute(query, *args)
+
+    async def fetch(self, query: str, *args):
+        return await self.pool.fetch(query, *args)
+
+    async def fetchrow(self, query: str, *args):
+        return await self.pool.fetchrow(query, *args)
+
+    async def add_listener(self, channel: str, callback) -> None:
+        self.listeners.setdefault(channel, []).append(callback)
+
+    async def remove_listener(self, channel: str, callback) -> None:
+        callbacks = self.listeners.get(channel, [])
+        if callback in callbacks:
+            callbacks.remove(callback)
+
+    def notify(self, channel: str, payload: str = "") -> None:
+        for callback in self.listeners.get(channel, []):
+            callback(self, 0, channel, payload)
 
 
 def test_send_and_receive_round_trip() -> None:
@@ -164,3 +225,44 @@ def test_notify_channel_is_bounded_for_long_channel_names() -> None:
     )
     assert len(notify_channel) <= 63
     assert notify_channel.startswith("fastapi_websockets_")
+
+
+def test_prunes_expired_messages_and_group_members() -> None:
+    async def run() -> None:
+        pool = FakePostgresPool()
+        layer = PostgreSQLChannelLayer(pool=pool, ensure_schema=False, prune_interval=0.001)
+        now = datetime.now(timezone.utc)
+        pool.messages.append(
+            {
+                "id": 1,
+                "channel": "chat.room",
+                "payload": '{"type":"stale"}',
+                "expires_at": now,
+            }
+        )
+        pool.group_members[("room", "channel.old")] = now
+
+        await asyncio.sleep(0.01)
+        await layer.send("chat.room", {"type": "message", "text": "fresh"})
+
+        assert len(pool.messages) == 1
+        assert pool.messages[0]["payload"] == '{"text":"fresh","type":"message"}'
+        assert pool.group_members == {}
+
+    asyncio.run(run())
+
+
+def test_receive_uses_listen_notify_wakeup_when_pool_supports_listeners() -> None:
+    async def run() -> None:
+        pool = FakePostgresPool()
+        layer = PostgreSQLChannelLayer(pool=pool, ensure_schema=False, poll_interval=1.0)
+        task = asyncio.create_task(layer.receive("chat.room", timeout=0.2))
+        await asyncio.sleep(0.01)
+        await layer.send("chat.room", {"type": "message", "text": "hello"})
+        notify_channel = layer._notify_channel("chat.room")
+        for connection in pool.listener_connections:
+            connection.notify(notify_channel, "chat.room")
+        message = await task
+        assert message == {"type": "message", "text": "hello"}
+
+    asyncio.run(run())

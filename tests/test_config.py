@@ -1,4 +1,5 @@
 from fastapi_websockets.backends.inmemory import InMemoryChannelLayer
+from fastapi_websockets.backends.base import BaseChannelLayer
 from fastapi_websockets.config import (
     BACKEND_ALIASES,
     DEFAULT_BACKEND,
@@ -11,6 +12,7 @@ from fastapi_websockets.config import (
     parse_channel_layers_from_env,
 )
 from fastapi_websockets.exceptions import InvalidChannelLayerConfig
+from fastapi_websockets.types import Message, MutableMessage
 
 
 def test_parse_channel_layers_uses_default_config_when_none() -> None:
@@ -22,6 +24,15 @@ def test_parse_channel_layers_uses_default_config_when_none() -> None:
 def test_load_backend_class_resolves_builtin_backend() -> None:
     backend_class = load_backend_class(DEFAULT_BACKEND)
     assert backend_class is InMemoryChannelLayer
+
+
+def test_load_backend_class_rejects_non_class_attribute() -> None:
+    try:
+        load_backend_class("fastapi_websockets.config.DEFAULT_BACKEND")
+    except InvalidChannelLayerConfig as exc:
+        assert "must resolve to a BaseChannelLayer subclass" in str(exc)
+    else:
+        raise AssertionError("Expected InvalidChannelLayerConfig")
 
 
 def test_build_channel_layer_instantiates_backend() -> None:
@@ -52,6 +63,15 @@ def test_parse_channel_layers_rejects_invalid_config() -> None:
         raise AssertionError("Expected InvalidChannelLayerConfig")
 
 
+def test_parse_channel_layers_rejects_non_mapping_layer_value() -> None:
+    try:
+        parse_channel_layers({"default": []})
+    except InvalidChannelLayerConfig as exc:
+        assert "must be a mapping" in str(exc)
+    else:
+        raise AssertionError("Expected InvalidChannelLayerConfig")
+
+
 def test_get_channel_layer_rejects_unknown_alias() -> None:
     try:
         get_channel_layer({}, alias="secondary")
@@ -61,9 +81,55 @@ def test_get_channel_layer_rejects_unknown_alias() -> None:
         raise AssertionError("Expected InvalidChannelLayerConfig")
 
 
+def test_load_backend_class_rejects_missing_dot_path() -> None:
+    try:
+        load_backend_class("inmemory")
+    except InvalidChannelLayerConfig as exc:
+        assert "full dotted import path" in str(exc)
+    else:
+        raise AssertionError("Expected InvalidChannelLayerConfig")
+
+
+def test_load_backend_class_rejects_missing_module() -> None:
+    try:
+        load_backend_class("missing.module.Layer")
+    except InvalidChannelLayerConfig as exc:
+        assert "Could not import backend module" in str(exc)
+    else:
+        raise AssertionError("Expected InvalidChannelLayerConfig")
+
+
+def test_load_backend_class_rejects_missing_attribute() -> None:
+    try:
+        load_backend_class("fastapi_websockets.config.DoesNotExist")
+    except InvalidChannelLayerConfig as exc:
+        assert "was not found" in str(exc)
+    else:
+        raise AssertionError("Expected InvalidChannelLayerConfig")
+
+
+def test_load_backend_class_rejects_non_subclass() -> None:
+    try:
+        load_backend_class("fastapi_websockets.exceptions.InvalidChannelLayerConfig")
+    except InvalidChannelLayerConfig as exc:
+        assert "must inherit from BaseChannelLayer" in str(exc)
+    else:
+        raise AssertionError("Expected InvalidChannelLayerConfig")
+
+
 def test_parse_channel_layers_from_env_uses_inmemory_defaults() -> None:
     layers = parse_channel_layers_from_env({})
     assert layers[DEFAULT_LAYER_ALIAS].backend == BACKEND_ALIASES["inmemory"]
+    assert layers[DEFAULT_LAYER_ALIAS].config == {"capacity": 100}
+
+
+def test_parse_channel_layers_from_env_supports_empty_backend_as_default_path() -> None:
+    layers = parse_channel_layers_from_env(
+        {
+            "FASTAPI_WEBSOCKETS_BACKEND": "",
+        }
+    )
+    assert layers[DEFAULT_LAYER_ALIAS].backend == DEFAULT_BACKEND
     assert layers[DEFAULT_LAYER_ALIAS].config == {"capacity": 100}
 
 
@@ -102,6 +168,7 @@ def test_parse_channel_layers_from_env_supports_postgresql() -> None:
             "FASTAPI_WEBSOCKETS_POSTGRESQL_CHANNEL_EXPIRY": "10",
             "FASTAPI_WEBSOCKETS_POSTGRESQL_GROUP_EXPIRY": "20",
             "FASTAPI_WEBSOCKETS_POSTGRESQL_POLL_INTERVAL": "0.25",
+            "FASTAPI_WEBSOCKETS_POSTGRESQL_PRUNE_INTERVAL": "12.5",
             "FASTAPI_WEBSOCKETS_POSTGRESQL_ENSURE_SCHEMA": "no",
         }
     )
@@ -112,6 +179,7 @@ def test_parse_channel_layers_from_env_supports_postgresql() -> None:
         "channel_expiry": 10,
         "group_expiry": 20,
         "poll_interval": 0.25,
+        "prune_interval": 12.5,
         "ensure_schema": False,
     }
 
@@ -146,6 +214,8 @@ def test_parse_channel_layers_from_env_supports_rabbitmq() -> None:
             "FASTAPI_WEBSOCKETS_RABBITMQ_QUEUE_PREFIX": "queue",
             "FASTAPI_WEBSOCKETS_RABBITMQ_DURABLE": "0",
             "FASTAPI_WEBSOCKETS_RABBITMQ_MESSAGE_TTL": "",
+            "FASTAPI_WEBSOCKETS_RABBITMQ_QUEUE_EXPIRY": "",
+            "FASTAPI_WEBSOCKETS_RABBITMQ_POLL_INTERVAL": "0.25",
         }
     )
     assert layers[DEFAULT_LAYER_ALIAS].backend == BACKEND_ALIASES["rabbitmq"]
@@ -155,6 +225,8 @@ def test_parse_channel_layers_from_env_supports_rabbitmq() -> None:
         "queue_prefix": "queue",
         "durable": False,
         "message_ttl": None,
+        "queue_expiry": None,
+        "poll_interval": 0.25,
     }
 
 
@@ -192,6 +264,7 @@ def test_parse_channel_layers_from_env_supports_multiple_aliases() -> None:
             "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_CHANNEL_EXPIRY": "15",
             "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_GROUP_EXPIRY": "45",
             "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_POLL_INTERVAL": "0.5",
+            "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_PRUNE_INTERVAL": "30",
             "FASTAPI_WEBSOCKETS_EVENTS_POSTGRESQL_ENSURE_SCHEMA": "false",
         }
     )
@@ -204,6 +277,7 @@ def test_parse_channel_layers_from_env_supports_multiple_aliases() -> None:
         "channel_expiry": 15,
         "group_expiry": 45,
         "poll_interval": 0.5,
+        "prune_interval": 30.0,
         "ensure_schema": False,
     }
 
@@ -235,3 +309,117 @@ def test_parse_channel_layers_from_env_rejects_invalid_bool() -> None:
         assert "REDIS_CLUSTER" in str(exc)
     else:
         raise AssertionError("Expected InvalidChannelLayerConfig")
+
+
+def test_parse_channel_layers_from_env_rejects_invalid_alias_name() -> None:
+    try:
+        parse_channel_layers_from_env(
+            {
+                "FASTAPI_WEBSOCKETS_ALIASES": "!!!",
+            }
+        )
+    except InvalidChannelLayerConfig as exc:
+        assert "alias must contain letters or digits" in str(exc)
+    else:
+        raise AssertionError("Expected InvalidChannelLayerConfig")
+
+
+def test_parse_channel_layers_from_env_rejects_invalid_int() -> None:
+    try:
+        parse_channel_layers_from_env(
+            {
+                "FASTAPI_WEBSOCKETS_BACKEND": "inmemory",
+                "FASTAPI_WEBSOCKETS_INMEMORY_CAPACITY": "abc",
+            }
+        )
+    except InvalidChannelLayerConfig as exc:
+        assert "must be an integer" in str(exc)
+    else:
+        raise AssertionError("Expected InvalidChannelLayerConfig")
+
+
+def test_parse_channel_layers_from_env_rejects_invalid_optional_int() -> None:
+    try:
+        parse_channel_layers_from_env(
+            {
+                "FASTAPI_WEBSOCKETS_BACKEND": "rabbitmq",
+                "FASTAPI_WEBSOCKETS_RABBITMQ_MESSAGE_TTL": "abc",
+            }
+        )
+    except InvalidChannelLayerConfig as exc:
+        assert "integer or empty" in str(exc)
+    else:
+        raise AssertionError("Expected InvalidChannelLayerConfig")
+
+
+def test_parse_channel_layers_from_env_rejects_invalid_float() -> None:
+    try:
+        parse_channel_layers_from_env(
+            {
+                "FASTAPI_WEBSOCKETS_BACKEND": "postgresql",
+                "FASTAPI_WEBSOCKETS_POSTGRESQL_POLL_INTERVAL": "abc",
+            }
+        )
+    except InvalidChannelLayerConfig as exc:
+        assert "must be a float" in str(exc)
+    else:
+        raise AssertionError("Expected InvalidChannelLayerConfig")
+
+
+def test_parse_channel_layers_from_env_uses_default_alias_when_csv_is_empty() -> None:
+    layers = parse_channel_layers_from_env(
+        {
+            "FASTAPI_WEBSOCKETS_ALIASES": " , ",
+            "FASTAPI_WEBSOCKETS_DEFAULT_BACKEND": "inmemory",
+            "FASTAPI_WEBSOCKETS_DEFAULT_INMEMORY_CAPACITY": "12",
+        }
+    )
+    assert set(layers) == {"default"}
+    assert layers["default"].config == {"capacity": 12}
+
+
+def test_parse_channel_layers_from_env_unknown_backend_has_empty_config() -> None:
+    layers = parse_channel_layers_from_env(
+        {
+            "FASTAPI_WEBSOCKETS_BACKEND": "custom.module.Backend",
+        }
+    )
+    assert layers["default"].backend == "custom.module.Backend"
+    assert layers["default"].config == {}
+
+
+def test_type_aliases_are_mapping_compatible() -> None:
+    message: Message = {"type": "event"}
+    mutable: MutableMessage = {"type": "event"}
+    assert dict(message) == {"type": "event"}
+    mutable["extra"] = True
+    assert mutable["extra"] is True
+
+
+class StubLayer(BaseChannelLayer):
+    async def send(self, channel, message):
+        del channel, message
+
+    async def receive(self, channel, timeout=None):
+        del channel, timeout
+        return {}
+
+    async def new_channel(self, prefix="specific"):
+        return prefix
+
+    async def group_add(self, group, channel):
+        del group, channel
+
+    async def group_discard(self, group, channel):
+        del group, channel
+
+    async def group_send(self, group, message):
+        del group, message
+
+    async def close(self):
+        return None
+
+
+def test_build_channel_layer_passes_through_empty_config_mapping() -> None:
+    layer = build_channel_layer("tests.test_config.StubLayer")
+    assert isinstance(layer, StubLayer)

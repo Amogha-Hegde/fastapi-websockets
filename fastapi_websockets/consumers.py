@@ -9,6 +9,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from fastapi_websockets.backends.base import BaseChannelLayer
 from fastapi_websockets.config import get_channel_layer
+from fastapi_websockets.exceptions import ChannelLayerClosed
 
 
 class AsyncWebSocketConsumer:
@@ -18,6 +19,7 @@ class AsyncWebSocketConsumer:
 
     def __init__(self, layer: BaseChannelLayer | None = None) -> None:
         self.channel_layer = layer or get_channel_layer()
+        self._owns_channel_layer = layer is None
         self.websocket: WebSocket | None = None
         self.scope: dict[str, Any] = {}
         self.channel_name = ""
@@ -61,10 +63,27 @@ class AsyncWebSocketConsumer:
                     task.cancel()
             for task in (websocket_pump, channel_pump):
                 if task is not None:
-                    with contextlib.suppress(asyncio.CancelledError):
+                    try:
                         await task
-            await self._cleanup_groups()
-            await self.disconnect(close_code)
+                    except BaseException as exc:
+                        if not self._is_expected_shutdown_error(exc):
+                            raise
+            try:
+                await self._cleanup_groups()
+            except BaseException as exc:
+                if not self._is_expected_shutdown_error(exc):
+                    raise
+            try:
+                await self.disconnect(close_code)
+            except BaseException as exc:
+                if not self._is_expected_shutdown_error(exc):
+                    raise
+            if self._owns_channel_layer:
+                try:
+                    await self.channel_layer.close()
+                except BaseException as exc:
+                    if not self._is_expected_shutdown_error(exc):
+                        raise
 
     async def connect(self) -> None:
         await self.accept()
@@ -193,8 +212,13 @@ class AsyncWebSocketConsumer:
 
     async def _cleanup_groups(self) -> None:
         for group in tuple(self._joined_groups):
-            await self.channel_layer.group_discard(group, self.channel_name)
-            self._joined_groups.discard(group)
+            try:
+                await self.channel_layer.group_discard(group, self.channel_name)
+            except BaseException as exc:
+                if not self._is_expected_shutdown_error(exc):
+                    raise
+            finally:
+                self._joined_groups.discard(group)
 
     async def _drain_pending_channel_events(
         self,
@@ -210,6 +234,18 @@ class AsyncWebSocketConsumer:
         if self.websocket is None:
             raise RuntimeError("WebSocket consumer is not bound to a websocket")
         return self.websocket
+
+    @staticmethod
+    def _is_expected_shutdown_error(exc: BaseException) -> bool:
+        if isinstance(exc, (asyncio.CancelledError, ChannelLayerClosed)):
+            return True
+        if isinstance(exc, (BrokenPipeError, ConnectionError, EOFError, OSError)):
+            return True
+        if isinstance(exc, RuntimeError):
+            message = str(exc).lower()
+            if "closed" in message or "closing" in message or "shutting down" in message:
+                return True
+        return False
 
 
 class AsyncJsonWebSocketConsumer(AsyncWebSocketConsumer):

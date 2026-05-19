@@ -26,6 +26,26 @@ class FakeSubscription:
         return items
 
 
+class FakeNatsTimeoutError(Exception):
+    pass
+
+
+FakeNatsTimeoutError.__module__ = "nats.errors"
+
+
+class PollingSubscription:
+    def __init__(self, stream_messages: list, failures_before_message: int = 0) -> None:
+        self.stream_messages = stream_messages
+        self.failures_before_message = failures_before_message
+
+    async def fetch(self, batch: int, timeout: float):
+        await asyncio.sleep(0)
+        if self.failures_before_message > 0:
+            self.failures_before_message -= 1
+            raise FakeNatsTimeoutError()
+        return self.stream_messages[:batch]
+
+
 class FakeJetStreamMessage:
     def __init__(self, data: bytes) -> None:
         self.data = data
@@ -36,24 +56,51 @@ class FakeJetStreamMessage:
 
 
 class FakeKVEntry:
-    def __init__(self, value: bytes) -> None:
+    def __init__(self, value: bytes, revision: int) -> None:
         self.value = value
+        self.revision = revision
+
+
+class FakeKVConflictError(Exception):
+    pass
 
 
 class FakeKVStore:
     def __init__(self) -> None:
         self.store = {}
+        self.revisions = {}
 
     async def put(self, key: str, value: bytes) -> None:
+        await asyncio.sleep(0)
         self.store[key] = value
+        self.revisions[key] = self.revisions.get(key, 0) + 1
+
+    async def create(self, key: str, value: bytes) -> None:
+        await asyncio.sleep(0)
+        if key in self.store:
+            raise FakeKVConflictError(key)
+        self.store[key] = value
+        self.revisions[key] = 1
+
+    async def update(self, key: str, value: bytes, revision: int) -> None:
+        await asyncio.sleep(0)
+        if self.revisions.get(key) != revision:
+            raise FakeKVConflictError(key)
+        self.store[key] = value
+        self.revisions[key] = revision + 1
 
     async def get(self, key: str):
+        await asyncio.sleep(0)
         if key not in self.store:
             raise KeyError(key)
-        return FakeKVEntry(self.store[key])
+        return FakeKVEntry(self.store[key], self.revisions[key])
 
-    async def delete(self, key: str) -> None:
+    async def delete(self, key: str, revision: int | None = None) -> None:
+        await asyncio.sleep(0)
+        if revision is not None and self.revisions.get(key) != revision:
+            raise FakeKVConflictError(key)
         self.store.pop(key, None)
+        self.revisions.pop(key, None)
 
 
 class FakeJetStream:
@@ -184,5 +231,35 @@ def test_close_closes_internal_client() -> None:
         await layer.close()
         assert nc.drained is True
         assert nc.closed is True
+
+    asyncio.run(run())
+
+
+def test_receive_normalizes_nats_timeout_errors() -> None:
+    async def run() -> None:
+        nc = FakeNatsClient()
+        layer = NATSChannelLayer(nats_client=nc)
+        subject = layer._channel_subject("chat.room")
+        nc.js.subscriptions[subject] = PollingSubscription([], failures_before_message=1)
+        try:
+            await layer.receive("chat.room", timeout=0.01)
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError("Expected built-in TimeoutError for idle NATS receive")
+
+    asyncio.run(run())
+
+
+def test_concurrent_group_add_preserves_all_members() -> None:
+    async def run() -> None:
+        nc = FakeNatsClient()
+        layer = NATSChannelLayer(nats_client=nc)
+        await asyncio.gather(
+            layer.group_add("room", "channel.one"),
+            layer.group_add("room", "channel.two"),
+        )
+        channels = await layer._get_group_channels("room")
+        assert channels == {"channel.one", "channel.two"}
 
     asyncio.run(run())
