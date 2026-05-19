@@ -7,6 +7,7 @@ from fastapi_websockets import (
     websocket_bytes_message,
     websocket_json_message,
 )
+from fastapi_websockets.messages import _coerce_bytes
 
 
 def test_websocket_bytes_message_builds_expected_envelope() -> None:
@@ -70,3 +71,12 @@ def test_send_json_message_uses_envelope() -> None:
         }
 
     asyncio.run(run())
+
+
+def test_websocket_bytes_message_rejects_non_binary_body() -> None:
+    try:
+        _coerce_bytes("nope")  # type: ignore[arg-type]
+    except TypeError as exc:
+        assert "Binary websocket body" in str(exc)
+    else:
+        raise AssertionError("Expected TypeError")
