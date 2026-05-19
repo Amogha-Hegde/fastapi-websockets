@@ -24,6 +24,15 @@ def test_load_backend_class_resolves_builtin_backend() -> None:
     assert backend_class is InMemoryChannelLayer
 
 
+def test_load_backend_class_rejects_non_class_attribute() -> None:
+    try:
+        load_backend_class("fastapi_websockets.config.DEFAULT_BACKEND")
+    except InvalidChannelLayerConfig as exc:
+        assert "must resolve to a BaseChannelLayer subclass" in str(exc)
+    else:
+        raise AssertionError("Expected InvalidChannelLayerConfig")
+
+
 def test_build_channel_layer_instantiates_backend() -> None:
     layer = build_channel_layer(DEFAULT_BACKEND, {"capacity": 3})
     assert isinstance(layer, InMemoryChannelLayer)

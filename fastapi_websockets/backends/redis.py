@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -65,14 +66,33 @@ class RedisChannelLayer(BaseChannelLayer):
         self._validate_name("channel", channel)
         client = await self._get_client()
         queue_key = self._channel_queue_key(channel)
-        timeout_seconds = 0 if timeout is None else max(timeout, 0.001)
-        result = await client.blpop(queue_key, timeout=timeout_seconds)
-        if result is None:
-            raise TimeoutError(f"Timed out waiting for channel '{channel}'")
-        _, payload = result
-        if self.channel_expiry > 0:
-            await client.expire(queue_key, self.channel_expiry)
-        return self.serializer.loads(payload)
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
+
+        while True:
+            payload = await self._pop_message(client, queue_key)
+            if payload is not None:
+                if self.channel_expiry > 0:
+                    await client.expire(queue_key, self.channel_expiry)
+                return self.serializer.loads(payload)
+
+            wait_for = None if deadline is None else max(deadline - loop.time(), 0)
+            if wait_for == 0:
+                raise TimeoutError(f"Timed out waiting for channel '{channel}'")
+
+            if self.use_pubsub:
+                woke = await self._wait_for_notification(client, channel, wait_for)
+                if woke:
+                    continue
+
+            timeout_seconds = 0 if deadline is None else max(wait_for or 0, 0.001)
+            result = await client.blpop(queue_key, timeout=timeout_seconds)
+            if result is None:
+                raise TimeoutError(f"Timed out waiting for channel '{channel}'")
+            _, payload = result
+            if self.channel_expiry > 0:
+                await client.expire(queue_key, self.channel_expiry)
+            return self.serializer.loads(payload)
 
     async def new_channel(self, prefix: str = "specific") -> str:
         self._ensure_open()
@@ -128,6 +148,74 @@ class RedisChannelLayer(BaseChannelLayer):
                 await spublish(notify_channel, payload)
                 return
         await client.publish(notify_channel, payload)
+
+    async def _pop_message(self, client: Any, queue_key: str) -> bytes | None:
+        lpop = getattr(client, "lpop", None)
+        if lpop is not None:
+            return await lpop(queue_key)
+
+        values = getattr(client, "lists", None)
+        if values is not None:
+            entries = values[queue_key]
+            if entries:
+                return entries.pop(0)
+            return None
+        return None
+
+    async def _wait_for_notification(
+        self,
+        client: Any,
+        channel: str,
+        timeout: float | None,
+    ) -> bool:
+        pubsub_factory = getattr(client, "pubsub", None)
+        if pubsub_factory is None:
+            return False
+
+        pubsub = pubsub_factory()
+        close = getattr(pubsub, "aclose", None) or getattr(pubsub, "close", None)
+        notify_channel = self._notify_channel(channel)
+        subscribe = self._resolve_pubsub_subscribe(pubsub)
+        get_message = getattr(pubsub, "get_message", None)
+
+        if subscribe is None or get_message is None:
+            if close is not None:
+                result = close()
+                if result is not None:
+                    await result
+            return False
+
+        try:
+            await subscribe(notify_channel)
+            message = await get_message(
+                ignore_subscribe_messages=True,
+                timeout=timeout,
+            )
+            return message is not None
+        finally:
+            unsubscribe = self._resolve_pubsub_unsubscribe(pubsub)
+            if unsubscribe is not None:
+                result = unsubscribe(notify_channel)
+                if result is not None:
+                    await result
+            if close is not None:
+                result = close()
+                if result is not None:
+                    await result
+
+    def _resolve_pubsub_subscribe(self, pubsub: Any) -> Any:
+        if self.sharded_pubsub:
+            subscribe = getattr(pubsub, "ssubscribe", None)
+            if subscribe is not None:
+                return subscribe
+        return getattr(pubsub, "subscribe", None)
+
+    def _resolve_pubsub_unsubscribe(self, pubsub: Any) -> Any:
+        if self.sharded_pubsub:
+            unsubscribe = getattr(pubsub, "sunsubscribe", None)
+            if unsubscribe is not None:
+                return unsubscribe
+        return getattr(pubsub, "unsubscribe", None)
 
     async def _get_client(self) -> Any:
         if self._redis is not None:

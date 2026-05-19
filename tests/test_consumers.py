@@ -282,6 +282,89 @@ def test_async_websocket_consumer_ignores_closed_layer_in_disconnect_hook() -> N
     asyncio.run(run())
 
 
+def test_async_websocket_consumer_suppresses_transport_shutdown_errors() -> None:
+    class TransportClosingLayer:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def new_channel(self, prefix: str = "specific") -> str:
+            return f"{prefix}.channel"
+
+        async def group_add(self, group: str, channel: str) -> None:
+            del group, channel
+
+        async def receive(self, channel: str, timeout: float | None = None):
+            del channel, timeout
+            while not self.closed:
+                await asyncio.sleep(0)
+            raise ConnectionResetError("transport closing")
+
+        async def group_discard(self, group: str, channel: str) -> None:
+            del group, channel
+            raise BrokenPipeError("socket closed")
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class ShutdownConsumer(AsyncWebSocketConsumer):
+        def __init__(self, layer) -> None:
+            super().__init__(layer=layer)
+            self.disconnect_called = False
+
+        async def connect(self) -> None:
+            await self.group_add("room")
+            await self.accept()
+
+        async def disconnect(self, close_code: int | None) -> None:
+            del close_code
+            self.disconnect_called = True
+            await self.channel_layer.close()
+            raise OSError("transport already closed")
+
+    async def run() -> None:
+        layer = TransportClosingLayer()
+        websocket = FakeWebSocket([{"type": "websocket.disconnect", "code": 1000}])
+        consumer = ShutdownConsumer(layer)
+        await consumer(websocket)
+        assert consumer.disconnect_called is True
+
+    asyncio.run(run())
+
+
+def test_async_websocket_consumer_group_cleanup_still_surfaces_backend_bugs() -> None:
+    class BuggyLayer:
+        async def new_channel(self, prefix: str = "specific") -> str:
+            return f"{prefix}.channel"
+
+        async def group_add(self, group: str, channel: str) -> None:
+            del group, channel
+
+        async def receive(self, channel: str, timeout: float | None = None):
+            del channel, timeout
+            await asyncio.sleep(3600)
+
+        async def group_discard(self, group: str, channel: str) -> None:
+            del group, channel
+            raise ValueError("group cleanup bug")
+
+    class BuggyConsumer(AsyncWebSocketConsumer):
+        async def connect(self) -> None:
+            await self.group_add("room")
+            await self.accept()
+
+    async def run() -> None:
+        consumer = BuggyConsumer(BuggyLayer())
+        websocket = FakeWebSocket([{"type": "websocket.disconnect", "code": 1000}])
+        try:
+            await consumer(websocket)
+        except ValueError as exc:
+            assert str(exc) == "group cleanup bug"
+        else:
+            raise AssertionError("Expected backend cleanup failure to surface")
+
+    asyncio.run(run())
+
+
 def test_async_websocket_consumer_ignores_group_cleanup_backend_errors() -> None:
     from fastapi_websockets.backends.inmemory import InMemoryChannelLayer
 

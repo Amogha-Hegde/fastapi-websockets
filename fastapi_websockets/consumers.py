@@ -62,12 +62,21 @@ class AsyncWebSocketConsumer:
                     task.cancel()
             for task in (websocket_pump, channel_pump):
                 if task is not None:
-                    with contextlib.suppress(asyncio.CancelledError, ChannelLayerClosed):
+                    try:
                         await task
-            with contextlib.suppress(ChannelLayerClosed):
+                    except BaseException as exc:
+                        if not self._is_expected_shutdown_error(exc):
+                            raise
+            try:
                 await self._cleanup_groups()
-            with contextlib.suppress(ChannelLayerClosed):
+            except BaseException as exc:
+                if not self._is_expected_shutdown_error(exc):
+                    raise
+            try:
                 await self.disconnect(close_code)
+            except BaseException as exc:
+                if not self._is_expected_shutdown_error(exc):
+                    raise
 
     async def connect(self) -> None:
         await self.accept()
@@ -198,11 +207,9 @@ class AsyncWebSocketConsumer:
         for group in tuple(self._joined_groups):
             try:
                 await self.channel_layer.group_discard(group, self.channel_name)
-            except Exception:
-                # Shutdown can close the transport while best-effort group cleanup is
-                # still running. At that point the websocket is already terminating,
-                # so cleanup failures should not surface as ASGI application errors.
-                pass
+            except BaseException as exc:
+                if not self._is_expected_shutdown_error(exc):
+                    raise
             finally:
                 self._joined_groups.discard(group)
 
@@ -220,6 +227,18 @@ class AsyncWebSocketConsumer:
         if self.websocket is None:
             raise RuntimeError("WebSocket consumer is not bound to a websocket")
         return self.websocket
+
+    @staticmethod
+    def _is_expected_shutdown_error(exc: BaseException) -> bool:
+        if isinstance(exc, (asyncio.CancelledError, ChannelLayerClosed)):
+            return True
+        if isinstance(exc, (BrokenPipeError, ConnectionError, EOFError, OSError)):
+            return True
+        if isinstance(exc, RuntimeError):
+            message = str(exc).lower()
+            if "closed" in message or "closing" in message or "shutting down" in message:
+                return True
+        return False
 
 
 class AsyncJsonWebSocketConsumer(AsyncWebSocketConsumer):

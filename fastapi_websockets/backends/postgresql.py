@@ -103,12 +103,12 @@ class PostgreSQLChannelLayer(BaseChannelLayer):
             if deadline is not None and asyncio.get_running_loop().time() >= deadline:
                 raise TimeoutError(f"Timed out waiting for channel '{channel}'")
 
-            sleep_for = self.poll_interval
+            wait_for = self.poll_interval
             if deadline is not None:
-                sleep_for = min(sleep_for, max(deadline - asyncio.get_running_loop().time(), 0))
-                if sleep_for == 0:
+                wait_for = min(wait_for, max(deadline - asyncio.get_running_loop().time(), 0))
+                if wait_for == 0:
                     raise TimeoutError(f"Timed out waiting for channel '{channel}'")
-            await asyncio.sleep(sleep_for)
+            await self._wait_for_notification(channel, wait_for)
 
     async def new_channel(self, prefix: str = "specific") -> str:
         self._ensure_open()
@@ -268,6 +268,34 @@ class PostgreSQLChannelLayer(BaseChannelLayer):
                 f"DELETE FROM {self._qualify('group_members')} WHERE expires_at IS NOT NULL AND expires_at <= NOW()"
             )
             self._last_prune_at = loop.time()
+
+    async def _wait_for_notification(self, channel: str, timeout: float) -> None:
+        pool = await self._get_pool()
+        acquire = getattr(pool, "acquire", None)
+        if acquire is None:
+            await asyncio.sleep(timeout)
+            return
+
+        event = asyncio.Event()
+        listener_channel = self._notify_channel(channel)
+
+        async with pool.acquire() as connection:
+            add_listener = getattr(connection, "add_listener", None)
+            remove_listener = getattr(connection, "remove_listener", None)
+            if add_listener is None or remove_listener is None:
+                await asyncio.sleep(timeout)
+                return
+
+            def listener(*_args: Any) -> None:
+                event.set()
+
+            await add_listener(listener_channel, listener)
+            try:
+                await asyncio.wait_for(event.wait(), timeout=timeout)
+            except TimeoutError:
+                return
+            finally:
+                await remove_listener(listener_channel, listener)
 
     def _qualify(self, table: str) -> str:
         return f"{self.schema}.{table}"

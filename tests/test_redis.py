@@ -12,6 +12,7 @@ class FakeRedis:
         self.expiry = {}
         self.notifications = []
         self.closed = False
+        self.pubsubs = []
 
     async def rpush(self, key: str, value: bytes) -> int:
         self.lists[key].append(value)
@@ -23,6 +24,12 @@ class FakeRedis:
             return key, values.pop(0)
         if timeout == 0:
             raise AssertionError("FakeRedis cannot block forever in tests")
+        return None
+
+    async def lpop(self, key: str):
+        values = self.lists[key]
+        if values:
+            return values.pop(0)
         return None
 
     async def expire(self, key: str, seconds: int) -> bool:
@@ -48,10 +55,49 @@ class FakeRedis:
 
     async def publish(self, channel: str, payload: bytes) -> int:
         self.notifications.append(("publish", channel, payload))
+        for pubsub in self.pubsubs:
+            pubsub.push_message(channel, payload)
         return 1
+
+    def pubsub(self):
+        pubsub = FakePubSub(self)
+        self.pubsubs.append(pubsub)
+        return pubsub
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+class FakePubSub:
+    def __init__(self, redis: FakeRedis) -> None:
+        self.redis = redis
+        self.subscriptions = set()
+        self.messages = asyncio.Queue()
+        self.closed = False
+
+    async def subscribe(self, channel: str) -> None:
+        self.subscriptions.add(channel)
+
+    async def unsubscribe(self, channel: str) -> None:
+        self.subscriptions.discard(channel)
+
+    async def get_message(self, ignore_subscribe_messages: bool = True, timeout: float | None = None):
+        del ignore_subscribe_messages
+        if timeout is None:
+            return await self.messages.get()
+        try:
+            return await asyncio.wait_for(self.messages.get(), timeout=timeout)
+        except TimeoutError:
+            return None
+
+    async def aclose(self) -> None:
+        self.closed = True
+        self.redis.pubsubs.remove(self)
+
+    def push_message(self, channel: str, payload: bytes) -> None:
+        if channel not in self.subscriptions:
+            return
+        self.messages.put_nowait({"channel": channel, "data": payload})
 
 
 def test_send_and_receive_round_trip() -> None:
@@ -141,5 +187,19 @@ def test_close_closes_internal_client() -> None:
         layer._owns_client = True
         await layer.close()
         assert redis.closed is True
+
+    asyncio.run(run())
+
+
+def test_receive_uses_pubsub_wakeup_when_available() -> None:
+    async def run() -> None:
+        redis = FakeRedis()
+        layer = RedisChannelLayer(redis_client=redis, use_pubsub=True, sharded_pubsub=False)
+        task = asyncio.create_task(layer.receive("chat.room", timeout=0.2))
+        await asyncio.sleep(0)
+        await layer.send("chat.room", {"type": "message", "text": "hello"})
+        message = await task
+        assert message == {"type": "message", "text": "hello"}
+        assert any(item[0] == "publish" for item in redis.notifications)
 
     asyncio.run(run())

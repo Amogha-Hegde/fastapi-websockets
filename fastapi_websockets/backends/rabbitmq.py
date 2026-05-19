@@ -10,7 +10,7 @@ from fastapi_websockets.serialization import JsonSerializer
 
 
 class RabbitMQChannelLayer(BaseChannelLayer):
-    """RabbitMQ-backed channel layer using aio-pika exchanges and durable queues."""
+    """RabbitMQ-backed channel layer using aio-pika exchanges and quorum queues."""
 
     def __init__(
         self,
@@ -25,6 +25,10 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         serializer: Any | None = None,
         **config: Any,
     ) -> None:
+        if not durable:
+            raise InvalidChannelLayerConfig(
+                "RabbitMQ quorum queues must be durable"
+            )
         super().__init__(
             url=url,
             exchange_name=exchange_name,
@@ -192,7 +196,8 @@ class RabbitMQChannelLayer(BaseChannelLayer):
         return queue
 
     async def _build_queue(self, queue_name: str, channel: str) -> Any:
-        queue_arguments = {}
+        del channel
+        queue_arguments = {"x-queue-type": "quorum"}
         if self.message_ttl is not None:
             queue_arguments["x-message-ttl"] = self.message_ttl
         if self.queue_expiry is not None:

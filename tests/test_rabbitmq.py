@@ -257,9 +257,19 @@ def test_declared_queues_use_queue_expiry() -> None:
         layer._build_message = fake_build_message.__get__(layer, RabbitMQChannelLayer)
         await layer.send("chat.room", {"type": "message"})
         queue = connection.queues["fastapi-websockets.chat.room"]
+        assert queue.arguments["x-queue-type"] == "quorum"
         assert queue.arguments["x-expires"] == 1234
 
     asyncio.run(run())
+
+
+def test_quorum_queues_must_be_durable() -> None:
+    try:
+        RabbitMQChannelLayer(durable=False)
+    except Exception as exc:
+        assert str(exc) == "RabbitMQ quorum queues must be durable"
+    else:
+        raise AssertionError("Expected InvalidChannelLayerConfig for non-durable quorum queue")
 
 
 async def fake_declare_exchange(self):

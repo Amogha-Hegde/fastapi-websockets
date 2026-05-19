@@ -69,6 +69,11 @@ def load_backend_class(path: str) -> Type[BaseChannelLayer]:
             f"Backend class '{class_name}' was not found in '{module_path}'"
         ) from exc
 
+    if not isinstance(backend_class, type):
+        raise InvalidChannelLayerConfig(
+            f"Backend '{path}' must resolve to a BaseChannelLayer subclass"
+        )
+
     if not issubclass(backend_class, BaseChannelLayer):
         raise InvalidChannelLayerConfig(
             f"Backend '{path}' must inherit from BaseChannelLayer"
