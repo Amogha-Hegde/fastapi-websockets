@@ -1,5 +1,11 @@
 # fastapi-websockets
 
+[![Tests](https://github.com/Amogha-Hegde/fastapi-websockets/actions/workflows/ci.yml/badge.svg)](https://github.com/Amogha-Hegde/fastapi-websockets/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/Amogha-Hegde/fastapi-websockets/branch/main/graph/badge.svg)](https://codecov.io/gh/Amogha-Hegde/fastapi-websockets)
+[![PyPI version](https://img.shields.io/pypi/v/fastapi-websockets.svg)](https://pypi.org/project/fastapi-websockets/)
+[![Python versions](https://img.shields.io/pypi/pyversions/fastapi-websockets.svg)](https://pypi.org/project/fastapi-websockets/)
+[![PyPI downloads](https://static.pepy.tech/badge/fastapi-websockets)](https://pepy.tech/project/fastapi-websockets)
+
 Backend-agnostic channel layers for FastAPI WebSocket workloads.
 
 The package is modeled after the channel-layer style used in Django: you configure one backend behind a common async interface and swap transports without changing application code.
