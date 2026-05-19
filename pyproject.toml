@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fastapi-websockets"
 version = "0.1.0"
-description = "Backend-agnostic WebSocket channel layers for FastAPI"
+description = "A Channels-style messaging layer for distributed FastAPI WebSocket applications"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
